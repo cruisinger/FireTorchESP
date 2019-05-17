@@ -3,36 +3,45 @@
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#include <PubSubClient.h> 
+#include <PubSubClient.h>  //PF
 #define screenWidth 14  //width of LED Matrix
 #define screenHeight 22   //height of LED Matrix
 #define extraLines 2 //only for firetorch()
 #define NUM_LEDS (screenWidth * screenHeight)
 CRGB leds[NUM_LEDS];
 #define PIN 3  //LED Signal PIN
-#define POWERCAPPING 4000  //in mA, for limiting power consumption by using insufficient power supplies
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
 #define BUTTON 4
 
 #ifndef STASSID
-#define STASSID "<SSID-NAME>"
+#define STASSID "<SSID>"
 #define STAPSK  "<WLAN-PASSWORD>"
 #endif
 
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t x, y;  //only for firetorch()
-uint8_t r=0.0, g=0.0, b=0.0;  //only for firetorch()
-uint16_t i=0,j=0,k=0;  //only for firetorch()
+uint8_t r=0.0, g=0.0, b=0.0;
+uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
 const char* ssid = STASSID;
 const char* password = STAPSK;
-const char* mqtt_server = "192.168.0.10";
+const char* mqtt_server = "192.168.1.100";
 const char* mqtt_username = "<MQTT_BROKER_USERNAME>";
 const char* mqtt_password = "<MQTT_BROKER_PASSWORD>";
+const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
 const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";
 const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";
-const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
+const char* mqtt_intopic_ledred = "cmnd/ledtorch/red";
+const char* mqtt_intopic_ledgreen = "cmnd/ledtorch/green";
+const char* mqtt_intopic_ledblue = "cmnd/ledtorch/blue";
+const char* mqtt_intopic_ledspeed = "cmnd/ledtorch/speed";
+const char* mqtt_intopic_ledflashes = "cmnd/ledtorch/flashes";
+const char* mqtt_intopic_ledeyewidth = "cmnd/ledtorch/eyewidth";
+const char* mqtt_intopic_ledeyespace = "cmnd/ledtorch/eyespace";
+const char* mqtt_intopic_ledfadespeed = "cmnd/ledtorch/fadespeed";
+const char* mqtt_intopic_ledfade = "cmnd/ledtorch/fade";
+const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
 long lastReconnectAttempt = 0; //for mqtt reconnect
 
@@ -43,13 +52,7 @@ ESP8266WebServer server(80);
 const int led = LED_BUILTIN;
 
 byte *c;
-//int i = 0;
-//int j = 0;
-//int k = 0;
 int dir = 0;
-//float r = 0.0;
-//float g = 0.0;
-//float b = 0.0;
 int red = 120;
 int green = 0;
 int blue = 0;
@@ -75,8 +78,9 @@ int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
 int snowDelay = random(100,1000);
 String message;
 String myIp;
-int selectedEffect = 0;
+int selectedEffect = 17;
 int selectedEffect_old=0;
+int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
 
 void resetArgs(){
   i = 0;j = 0;k = 0;dir = 0;r = 0.0;g = 0.0;b = 0.0;red = 120;green = 0;blue = 0;Speed = 100;EyeWidth = 2;EyeSpace = 4;prevMillis = 0;delayMillis = 0;snowMillis = 0;Fade = false;fadeSpeed = 200;eyeStat = false;Flashes = 0;Delay = 0;Pause = 0;state = 0;
@@ -85,6 +89,7 @@ void resetArgs(){
 void handleRoot() {
   digitalWrite(led, 0);
   message="<html><head><style>input[type='number'] {width:75px;}</style></head><body style='font-family: sans-serif; font-size: 16px'>    The Following functions are available:<br><br><a href='http://" + myIp + "/ledoff' class='button'>Turn off leds</a><br><br>";
+  message+="<form action='http://" + myIp + "/powerlimit'> Power limit: <input type='number' name='powerlimit' min='100' max='10000' value='1000'></form>";
   message+="<form action='http://" + myIp + "/colorwipe'><input type='submit' value='ColorWipe'> Red <input type='number' name='red' min='0' max='255' value='120'> Green <input type='number' name='green' min='0' max='255' value='0'> Blue <input type='number' name='blue' min='0' max='255' value='0'> Speed <input type='number' name='speed' min='1' max='5000' value='100'></form>";
   message+="<form action='http://" + myIp + "/cyclonbounce'><input type='submit' value='CyclonBounce'> Red <input type='number' name='red' min='0' max='255' value='0'> Green <input type='number' name='green' min='0' max='255' value='127'> Blue <input type='number' name='blue' min='0' max='255' value='0'> Speed <input type='number' name='speed' min='1' max='5000' value='100'> EyeWidth <input type='number' name='eyewidth' min='1' max='500' value='2'></form>";
   message+="<form action='http://" + myIp + "/fadeinout'><input type='submit' value='FadeInOut'> Red <input type='number' name='red' min='0' max='255' value='0'> Green <input type='number' name='green' min='0' max='255' value='0'> Blue <input type='number' name='blue' min='0' max='255' value='127'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
@@ -101,7 +106,7 @@ void handleRoot() {
   message+="<form action='http://" + myIp + "/theatrechaserainbow'><input type='submit' value='TheatreChaseRainbow'> Speed <input type='number' name='speed' min='1' max='5000' value='75'></form>";
   message+="<form action='http://" + myIp + "/twinklerandom'><input type='submit' value='TwinkleRandom'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
   message+="<form action='http://" + myIp + "/twinkle'><input type='submit' value='Twinkle'> Red <input type='number' name='red' min='0' max='255' value='20'> Green <input type='number' name='green' min='0' max='255' value='40'> Blue <input type='number' name='blue' min='0' max='255' value='10'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
-  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetoch'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>"; //erweitert um Firetorch
+  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetoch'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>"; //erweitert um Firetorch
   message+="</body></html>";
   server.send(200, "text/html", message);
   digitalWrite(led, 1);
@@ -127,6 +132,7 @@ void handleArgs(){
   if (server.hasArg("flashes")){String flsh = server.arg("flashes");Flashes = flsh.toInt();}
   if (server.hasArg("delay")){String dlay = server.arg("delay");Delay = dlay.toInt();}
   if (server.hasArg("pause")){String paus = server.arg("pause");Pause = paus.toInt();}
+  if (server.hasArg("powerlimit")){String pwlim = server.arg("powerlimit");PowerLimit = pwlim.toInt();}
 }
 
 void handleColorWipe(){resetArgs();handleArgs();selectedEffect=1;handleRoot();}
@@ -146,6 +152,7 @@ void handleTheaterChaseRainbow(){resetArgs();handleArgs();selectedEffect=14;hand
 void handleTwinkleRandom(){resetArgs();handleArgs();selectedEffect=15;handleRoot();}
 void handleTwinkle(){resetArgs();handleArgs();selectedEffect=16;handleRoot();}
 void handleFiretorch(){resetArgs();handleArgs();selectedEffect=17;handleRoot();}
+void handlePowerLimit(){resetArgs();handleArgs();handleRoot();}
 
 void handleNotFound() {
   digitalWrite(led, 0);
@@ -182,6 +189,7 @@ void setup(void) {
 
   server.on("/", handleRoot);
   server.on("/ledoff", [](){selectedEffect=0;handleRoot();});
+  server.on("/powerlimit", handlePowerLimit);  
   server.on("/colorwipe", handleColorWipe);
   server.on("/cyclonbounce", handleCyclonBounce);
   server.on("/fadeinout", handleFadeInOut);
@@ -203,12 +211,13 @@ void setup(void) {
   server.begin();
   Serial.println("HTTP server started");
   FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
-  FastLED.setMaxPowerInMilliWatts(POWERCAPPING);  // for powercapping, limits power usage
+  FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
 }
 
 void loop(void) {
   server.handleClient();
   checkForMessages();
+  FastLED.setMaxPowerInMilliWatts(PowerLimit);
   
     if (!client.connected()) {
     long now = millis();
@@ -777,12 +786,66 @@ void callback(char* topic, byte* payload, unsigned int length) {
           selectedEffect = intPrg;
         }
     } 
+    
   if(str_topic==mqtt_intopic_ledpowcap){
-    if(intPrg>100 && intPrg<6000){
-      FastLED.setMaxPowerInMilliWatts(intPrg);
+    if(intPrg>50 && intPrg<10000){
+      PowerLimit=intPrg;
       }
     }
-  
+
+  if(str_topic==mqtt_intopic_ledred){
+    if(intPrg>0 && intPrg<255){
+      red=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledgreen){
+    if(intPrg>0 && intPrg<255){
+      green=intPrg;
+      }
+    }    
+
+  if(str_topic==mqtt_intopic_ledblue){
+    if(intPrg>0 && intPrg<255){
+      blue=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledeyewidth){
+    if(intPrg>0 && intPrg<255){
+      EyeWidth=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledflashes){
+    if(intPrg>0 && intPrg<255){
+      Flashes=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledeyespace){
+    if(intPrg>0 && intPrg<255){
+      EyeSpace=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledfadespeed){
+    if(intPrg>0 && intPrg<255){
+      fadeSpeed=intPrg;
+      }
+    }
+
+  if(str_topic==mqtt_intopic_ledfade){
+    if(intPrg>0 && intPrg<255){
+      Fade=intPrg;
+      }
+    }        
+    
+  if(str_topic==mqtt_intopic_ledspeed){
+    if(intPrg>0 && intPrg<255){
+      Speed=intPrg;
+      }
+    }
 
 }
 
@@ -793,8 +856,7 @@ boolean reconnect() {
     // Attempt to connect
     if (client.connect("FireTorchESP", mqtt_username, mqtt_password)) {
       Serial.println("connected");
-      client.subscribe(mqtt_intopic_ledprg);
-      client.subscribe(mqtt_intopic_ledpowcap);
+      client.subscribe(mqtt_intopic_ledtorch);
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
