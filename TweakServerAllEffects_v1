@@ -6,14 +6,14 @@
 #include <PubSubClient.h>
 #include <DNSServer.h>  
 #include <WiFiManager.h>
-#define screenWidth 14  //width of LED Matrix
+#define screenWidth 14    //width of LED Matrix
 #define screenHeight 22   //height of LED Matrix
-#define extraLines 2 //only for firetorch()
+#define extraLines 2      //only for firetorch()
 #define NUM_LEDS (screenWidth * screenHeight)
 CRGB leds[NUM_LEDS];
 #define PIN 3  //LED Signal PIN
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
-#define BUTTON 4
+#define BUTTON 4  //Button for switching programs
 
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
@@ -21,13 +21,12 @@ uint8_t x, y;  //only for firetorch()
 uint8_t r=0.0, g=0.0, b=0.0;
 uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
-
-const char* mqtt_server = "192.168.0.10";
-const char* mqtt_username = "<MQTT_BROKER_USERNAME>";
+const char* mqtt_server = "192.168.0.10";          //your mqtt-server, leaving blanc disables mqtt-support
+const char* mqtt_username = "<MQTT_BROKER_USERNAME>"; 
 const char* mqtt_password = "<MQTT_BROKER_PASSWORD>";
-const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
-const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";
-const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";
+const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";  
+const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";   //mqtt topic for selecting program
+const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";  //mqtt topic for limiting power consumption
 const char* mqtt_intopic_ledred = "cmnd/ledtorch/red";
 const char* mqtt_intopic_ledgreen = "cmnd/ledtorch/green";
 const char* mqtt_intopic_ledblue = "cmnd/ledtorch/blue";
@@ -39,7 +38,8 @@ const char* mqtt_intopic_ledfadespeed = "cmnd/ledtorch/fadespeed";
 const char* mqtt_intopic_ledfade = "cmnd/ledtorch/fade";
 const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
-long lastReconnectAttempt = 0; //for mqtt reconnect
+int lastReconnectAttempt = 0; //for mqtt reconnect
+boolean mqtt_enabled = 1;   //mqtt functionality enabled
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -177,13 +177,22 @@ void setup(void) {
   attachInterrupt (digitalPinToInterrupt (BUTTON), changeEffect, CHANGE); // pressed
 
   WiFiManager wifiManager;
-  wifiManager.autoConnect("LED-Fackel", "egalegal!");
-  myIp = WiFi.localIP().toString();
+  wifiManager.autoConnect("LED-Fackel", "wlan-password");    // change here the initial access point values
+  myIp = WiFi.localIP().toString();            //important for web-interface
 
-  client.setServer(mqtt_server, 1883);
-  client.setCallback(callback);
-  delay(1500);
-  lastReconnectAttempt = 0;
+  if (mqtt_server){
+    Serial.print("mqtt server: ");
+    Serial.println(mqtt_server);
+    client.setServer(mqtt_server, 1883);
+    client.setCallback(callback);
+    delay(1500);
+    lastReconnectAttempt = 0;  
+  }
+  else{
+  Serial.print("no mqtt-server given, disabling mqtt support");
+  mqtt_enabled = 0;
+  }
+
 
   server.on("/", handleRoot);
   server.on("/ledoff", [](){selectedEffect=0;handleRoot();});
@@ -217,7 +226,7 @@ void loop(void) {
   checkForMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);
   
-    if (!client.connected()) {
+    if (!client.connected() && mqtt_enabled==1) {
     long now = millis();
     if (now - lastReconnectAttempt > 5000) {
       lastReconnectAttempt = now;
@@ -256,10 +265,6 @@ void loop(void) {
 void changeEffect() {
   if (digitalRead (BUTTON) == HIGH) {
     selectedEffect++;
-    //digitalWrite(D0, LOW); delay(100);
-    /*Serial.print(" Reset detected:");
-    Serial.print(D0);
-    Serial.println();*/
   }
 }
 
@@ -826,17 +831,23 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 boolean reconnect() {
+  int mqttconncounter=0;
   // Loop until we're reconnected
-  while (!client.connected()) {
+  while (!client.connected() && mqttconncounter < 5) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (client.connect("FireTorchESP", mqtt_username, mqtt_password)) {
       Serial.println("connected");
       client.subscribe(mqtt_intopic_ledtorch);
+      mqttconncounter=0;
     } else {
+      mqttconncounter++;
       Serial.print("failed, rc=");
       Serial.print(client.state());
-      Serial.println(" try again in 3 seconds");
+      Serial.println(" try again in 3 seconds, mqttconncounter=");
+      Serial.println(mqttconncounter);
+      if (mqttconncounter > 4)         // if reconnect to mqtt-server fails for 5 times, mqtt is disabled until reboot
+      {mqtt_enabled=0;}
       // Wait 3 seconds before retrying
       delay(3000);
     }
