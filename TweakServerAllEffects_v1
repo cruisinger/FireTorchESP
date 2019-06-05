@@ -3,7 +3,9 @@
 #include <WiFiClient.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
-#include <PubSubClient.h>  //PF
+#include <PubSubClient.h>
+#include <DNSServer.h>  
+#include <WiFiManager.h>
 #define screenWidth 14  //width of LED Matrix
 #define screenHeight 22   //height of LED Matrix
 #define extraLines 2 //only for firetorch()
@@ -13,20 +15,14 @@ CRGB leds[NUM_LEDS];
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
 #define BUTTON 4
 
-#ifndef STASSID
-#define STASSID "<SSID>"
-#define STAPSK  "<WLAN-PASSWORD>"
-#endif
-
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t x, y;  //only for firetorch()
 uint8_t r=0.0, g=0.0, b=0.0;
 uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
-const char* ssid = STASSID;
-const char* password = STAPSK;
-const char* mqtt_server = "192.168.1.100";
+
+const char* mqtt_server = "192.168.0.10";
 const char* mqtt_username = "<MQTT_BROKER_USERNAME>";
 const char* mqtt_password = "<MQTT_BROKER_PASSWORD>";
 const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
@@ -180,7 +176,9 @@ void setup(void) {
   digitalWrite (BUTTON, HIGH);  // internal pull-up resistor
   attachInterrupt (digitalPinToInterrupt (BUTTON), changeEffect, CHANGE); // pressed
 
-  setup_wifi();
+  WiFiManager wifiManager;
+  wifiManager.autoConnect("LED-Fackel", "egalegal!");
+  myIp = WiFi.localIP().toString();
 
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
@@ -743,29 +741,7 @@ void setAll(byte red, byte green, byte blue) {
   showStrip();
 }
 
-/*--------WIFI-and-MQTT----------------------*/
-
-void setup_wifi() {
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  myIp = WiFi.localIP().toString();
-}
+/*-------------------MQTT----------------------*/
 
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
@@ -882,6 +858,7 @@ boolean checkForMessages(){
         
        return true;
     } else {
+        //Serial.println("selectedEffect gleich");
        return false;
     }
   }
