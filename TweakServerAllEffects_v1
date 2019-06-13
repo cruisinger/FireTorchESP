@@ -6,14 +6,17 @@
 #include <PubSubClient.h>
 #include <DNSServer.h>  
 #include <WiFiManager.h>
-#define screenWidth 14    //width of LED Matrix
+#define screenWidth 14  //width of LED Matrix
 #define screenHeight 22   //height of LED Matrix
-#define extraLines 2      //only for firetorch()
+#define extraLines 2 //only for firetorch()
 #define NUM_LEDS (screenWidth * screenHeight)
 CRGB leds[NUM_LEDS];
-#define PIN 3  //LED Signal PIN
+#define PIN 3  //LED-strip signal PIN
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
-#define BUTTON 4  //Button for switching programs
+#define BUTTON 4  // PIN for changing programs
+#define WLANBUTTON 5  //PIN for calling wifimanager
+#define ap_ssid "LED-Torch"
+#define ap_pw "your_password"
 
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
@@ -21,12 +24,12 @@ uint8_t x, y;  //only for firetorch()
 uint8_t r=0.0, g=0.0, b=0.0;
 uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
-const char* mqtt_server = "192.168.0.10";          //your mqtt-server, leaving blanc disables mqtt-support
-const char* mqtt_username = "<MQTT_BROKER_USERNAME>"; 
+const char* mqtt_server = "192.168.0.10";  // your mqtt server, leave blanc to disable mqtt support
+const char* mqtt_username = "<MQTT_BROKER_USERNAME>";
 const char* mqtt_password = "<MQTT_BROKER_PASSWORD>";
-const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";  
-const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";   //mqtt topic for selecting program
-const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";  //mqtt topic for limiting power consumption
+const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
+const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";
+const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";
 const char* mqtt_intopic_ledred = "cmnd/ledtorch/red";
 const char* mqtt_intopic_ledgreen = "cmnd/ledtorch/green";
 const char* mqtt_intopic_ledblue = "cmnd/ledtorch/blue";
@@ -39,7 +42,7 @@ const char* mqtt_intopic_ledfade = "cmnd/ledtorch/fade";
 const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
 int lastReconnectAttempt = 0; //for mqtt reconnect
-boolean mqtt_enabled = 1;   //mqtt functionality enabled
+boolean mqtt_enabled = 1;   // set to 0 to disable mqtt support
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -74,9 +77,9 @@ int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
 int snowDelay = random(100,1000);
 String message;
 String myIp;
-int selectedEffect = 17;
-int selectedEffect_old=0;
-int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
+unsigned int selectedEffect = 17;  //defines start-program
+unsigned int selectedEffect_old=0;
+unsigned int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
 
 void resetArgs(){
   i = 0;j = 0;k = 0;dir = 0;r = 0.0;g = 0.0;b = 0.0;red = 120;green = 0;blue = 0;Speed = 100;EyeWidth = 2;EyeSpace = 4;prevMillis = 0;delayMillis = 0;snowMillis = 0;Fade = false;fadeSpeed = 200;eyeStat = false;Flashes = 0;Delay = 0;Pause = 0;state = 0;
@@ -176,11 +179,24 @@ void setup(void) {
   digitalWrite (BUTTON, HIGH);  // internal pull-up resistor
   attachInterrupt (digitalPinToInterrupt (BUTTON), changeEffect, CHANGE); // pressed
 
-  WiFiManager wifiManager;
-  wifiManager.autoConnect("LED-Fackel", "wlan-password");    // change here the initial access point values
-  myIp = WiFi.localIP().toString();            //important for web-interface
+  pinMode(WLANBUTTON, INPUT);
+  digitalWrite (WLANBUTTON, HIGH);  // internal pull-up resistor
 
-  if (mqtt_server){
+  WiFiManager wifiManager;
+
+  wifiManager.setConfigPortalTimeout(180); //timeout before falling back to softAP
+
+  if(!wifiManager.autoConnect(ap_ssid, ap_pw)) {
+    Serial.println("failed to connect to station accesspoint and hit timeout");
+    delay(3000);
+    setup_wifi_fallback_ap();      // creates local soft accesspoint if no external accesspoint found or configured
+    } 
+  else{
+    myIp = WiFi.localIP().toString();  //getting ip if connected to external accesspoint
+    }
+  
+
+  if (mqtt_server && mqtt_enabled==1){  //check if mqtt server configured and mqtt support enabled
     Serial.print("mqtt server: ");
     Serial.println(mqtt_server);
     client.setServer(mqtt_server, 1883);
@@ -189,7 +205,7 @@ void setup(void) {
     lastReconnectAttempt = 0;  
   }
   else{
-  Serial.print("no mqtt-server given, disabling mqtt support");
+  Serial.println("no mqtt-server specified or mqtt disabled, disabling complete mqtt support");
   mqtt_enabled = 0;
   }
 
@@ -216,7 +232,7 @@ void setup(void) {
   server.on("/firetorch", handleFiretorch);  
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.println("HTTP server started");
+  Serial.print("HTTP server started");
   FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
 }
@@ -225,8 +241,29 @@ void loop(void) {
   server.handleClient();
   checkForMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);
+
+  if ( digitalRead(BUTTON) == LOW ) {
+    changeEffect;
+  }
   
-    if (!client.connected() && mqtt_enabled==1) {
+  if ( digitalRead(WLANBUTTON) == LOW ) {  //if PIN is connected to ground, the wifimanager is called and wifi credentials are resetted
+      WiFiManager wifiManager;
+      wifiManager.resetSettings();
+      
+    if (!wifiManager.startConfigPortal("OnDemandAP")) {
+      Serial.println("failed to connect and hit timeout");
+      delay(3000);
+      //reset and try again, or maybe put it to deep sleep
+      ESP.reset();
+      delay(5000);
+      }
+
+    //if you get here you have connected to the WiFi
+    Serial.println("connected...yeey :)");
+  }
+  
+  
+    if (!client.connected() && mqtt_enabled==1) {  //if mqtt server disconnected and mqtt support enabled
     long now = millis();
     if (now - lastReconnectAttempt > 5000) {
       lastReconnectAttempt = now;
@@ -265,6 +302,10 @@ void loop(void) {
 void changeEffect() {
   if (digitalRead (BUTTON) == HIGH) {
     selectedEffect++;
+    //digitalWrite(D0, LOW); delay(100);
+    /*Serial.print(" Reset detected:");
+    Serial.print(D0);
+    Serial.println();*/
   }
 }
 
@@ -746,7 +787,28 @@ void setAll(byte red, byte green, byte blue) {
   showStrip();
 }
 
-/*-------------------MQTT----------------------*/
+/*--------WIFI-and-MQTT----------------------*/
+
+void setup_wifi_fallback_ap() {
+  delay(10);
+  // We start by creating a soft Accesspoint
+  Serial.println();
+  Serial.print("Creating AP ");
+  Serial.println(ap_ssid);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ap_ssid, ap_pw);
+
+  mqtt_enabled = 0;  //for disabling mqtt support because no station accesspoint found
+  Serial.println("");
+  Serial.println("WiFi AP created, mqtt disabled");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.softAPIP());
+  myIp = WiFi.softAPIP().toString();
+}
+
+
+
 
 void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message arrived [");
@@ -777,6 +839,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if(str_topic==mqtt_intopic_ledred){
     if(intPrg>0 && intPrg<255){
       red=intPrg;
+//      handlePowerLimit;
       }
     }
 
@@ -846,8 +909,8 @@ boolean reconnect() {
       Serial.print(client.state());
       Serial.println(" try again in 3 seconds, mqttconncounter=");
       Serial.println(mqttconncounter);
-      if (mqttconncounter > 4)         // if reconnect to mqtt-server fails for 5 times, mqtt is disabled until reboot
-      {mqtt_enabled=0;}
+      if (mqttconncounter > 4)
+      {mqtt_enabled=0;}  //for disabling mqtt support
       // Wait 3 seconds before retrying
       delay(3000);
     }
