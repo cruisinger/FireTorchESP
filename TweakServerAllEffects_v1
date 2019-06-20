@@ -179,7 +179,7 @@ void setup(void) {
   digitalWrite (BUTTON, HIGH);  // internal pull-up resistor
   attachInterrupt (digitalPinToInterrupt (BUTTON), changeEffect, CHANGE); // pressed
 
-  pinMode(WLANBUTTON, INPUT);
+  pinMode(WLANBUTTON, INPUT_PULLUP);
   digitalWrite (WLANBUTTON, HIGH);  // internal pull-up resistor
 
   WiFiManager wifiManager;
