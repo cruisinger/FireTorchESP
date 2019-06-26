@@ -6,17 +6,20 @@
 #include <PubSubClient.h>
 #include <DNSServer.h>  
 #include <WiFiManager.h>
-#define screenWidth 14  //width of LED Matrix
-#define screenHeight 22   //height of LED Matrix
+#define screenWidth 14  //width of LED Matrix 14
+#define screenHeight 22   //height of LED Matrix 22
 #define extraLines 2 //only for firetorch()
 #define NUM_LEDS (screenWidth * screenHeight)
-CRGB leds[NUM_LEDS];
-#define PIN 3  //LED-strip signal PIN
+#define CHIPSET     WS2812B
+#define LED_PIN     3 //LED-strip signal GPIO-PIN
+#define COLOR_ORDER GRB
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
-#define BUTTON 4  // PIN for changing programs
-#define WLANBUTTON 5  //PIN for calling wifimanager
-#define ap_ssid "LED-Torch"
-#define ap_pw "your_password"
+#define EFFECTBUTTON 14  // GPIO-PIN for changing programs
+#define WLANBUTTON 5  // GPIO-PIN for calling wifimanager
+#define AP_SSID "LED-Fackel"  // initial accesspoint ssid
+#define AP_PW "password"   // password for initial accesspoint
+#define MAXMQTTCONRETRY 5  //maximum attempts to connect to mqtt server if connection is lost
+#define MAXIMUMEFFECTS 29  //Number of available effects/ LED-programs
 
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
@@ -24,12 +27,13 @@ uint8_t x, y;  //only for firetorch()
 uint8_t r=0.0, g=0.0, b=0.0;
 uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
-const char* mqtt_server = "192.168.0.10";  // your mqtt server, leave blanc to disable mqtt support
+const char* mqtt_server = "192.168.0.10";  // leave empty if no server available
 const char* mqtt_username = "<MQTT_BROKER_USERNAME>";
 const char* mqtt_password = "<MQTT_BROKER_PASSWORD>";
 const char* mqtt_outtopic_ledprg = "tele/ledtorch/prg";
 const char* mqtt_intopic_ledprg = "cmnd/ledtorch/prg";
 const char* mqtt_intopic_ledpowcap = "cmnd/ledtorch/powcap";
+const char* mqtt_intopic_ledbright = "cmnd/ledtorch/bright";
 const char* mqtt_intopic_ledred = "cmnd/ledtorch/red";
 const char* mqtt_intopic_ledgreen = "cmnd/ledtorch/green";
 const char* mqtt_intopic_ledblue = "cmnd/ledtorch/blue";
@@ -41,9 +45,10 @@ const char* mqtt_intopic_ledfadespeed = "cmnd/ledtorch/fadespeed";
 const char* mqtt_intopic_ledfade = "cmnd/ledtorch/fade";
 const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
-int lastReconnectAttempt = 0; //for mqtt reconnect
-boolean mqtt_enabled = 1;   // set to 0 to disable mqtt support
+byte lastReconnectAttempt = 0; //for mqtt reconnect
+boolean mqtt_enabled = 1;  // set to 0 if mqtt not needed
 
+CRGB leds[NUM_LEDS];
 WiFiClient espClient;
 PubSubClient client(espClient);
 ESP8266WebServer server(80);
@@ -59,7 +64,7 @@ int Speed = 100;
 int EyeWidth = 2;
 int EyeSpace = 4;
 unsigned long currentMillis;
-long prevMillis = 0;
+unsigned long prevMillis = 0;
 long delayMillis = 0;
 long snowMillis = 0;
 bool Fade = true;
@@ -77,9 +82,65 @@ int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
 int snowDelay = random(100,1000);
 String message;
 String myIp;
-unsigned int selectedEffect = 17;  //defines start-program
-unsigned int selectedEffect_old=0;
+byte selectedEffect = 18;  //defines start-program/effect
+byte selectedEffect_old=0;  // helper variable for effect
 unsigned int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
+unsigned int brightness = 63;   // set startup brightness 0-255 for light intensity
+
+//-------from-FunkyCloudsCompendium------------
+// MSGEQ7 wiring on spectrum analyser shield
+#define MSGEQ7_STROBE_PIN 4
+#define MSGEQ7_RESET_PIN  4
+#define AUDIO_LEFT_PIN    A0
+#define AUDIO_RIGHT_PIN   A0
+
+// all 2D effects will be calculated in this matrix size
+// do not touch
+const uint8_t WIDTH  = 16;
+const uint8_t HEIGHT = 16;
+
+// number of LEDs based on fixed calculation matrix size
+// do not touch
+//#define NUM_LEDS (WIDTH * HEIGHT)
+
+// the rendering buffer (16*16)
+// do not touch
+//CRGB leds[NUM_LEDS];
+
+// your display buffer for your not 16*16 setup
+//CRGB leds2[CUSTOM_HEIGHT * CUSTOM_WIDTH];
+
+// the oscillators: linear ramps 0-255
+// modified only by MoveOscillators()
+byte osci[4]; 
+
+// sin8(osci) swinging between 0 - 15
+// modified only by MoveOscillators()
+byte p[4];
+
+// storage of the 7 10Bit (0-1023) audio band values
+// modified only by AudioRead()
+int left[7];    
+int right[7];
+
+// noise stuff
+uint16_t speed = 10;
+uint16_t scale = 50;
+uint16_t scale2 = 30;
+const uint8_t kMatrixWidth = 16;
+const uint8_t kMatrixHeight = 16;
+#define MAX_DIMENSION ((kMatrixWidth>kMatrixHeight) ? kMatrixWidth : kMatrixHeight)
+uint8_t noise[MAX_DIMENSION][MAX_DIMENSION];
+uint8_t noise2[MAX_DIMENSION][MAX_DIMENSION];
+static uint16_t x_1, y_1, z_1;
+static uint16_t x2, y2, z2;
+//palette stuff
+CRGBPalette16 currentPalette;
+TBlendType    currentBlending;
+extern CRGBPalette16 myRedWhiteBluePalette;
+extern const TProgmemPalette16 myRedWhiteBluePalette_p PROGMEM;
+
+//------------------------------------------
 
 void resetArgs(){
   i = 0;j = 0;k = 0;dir = 0;r = 0.0;g = 0.0;b = 0.0;red = 120;green = 0;blue = 0;Speed = 100;EyeWidth = 2;EyeSpace = 4;prevMillis = 0;delayMillis = 0;snowMillis = 0;Fade = false;fadeSpeed = 200;eyeStat = false;Flashes = 0;Delay = 0;Pause = 0;state = 0;
@@ -105,7 +166,17 @@ void handleRoot() {
   message+="<form action='http://" + myIp + "/theatrechaserainbow'><input type='submit' value='TheatreChaseRainbow'> Speed <input type='number' name='speed' min='1' max='5000' value='75'></form>";
   message+="<form action='http://" + myIp + "/twinklerandom'><input type='submit' value='TwinkleRandom'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
   message+="<form action='http://" + myIp + "/twinkle'><input type='submit' value='Twinkle'> Red <input type='number' name='red' min='0' max='255' value='20'> Green <input type='number' name='green' min='0' max='255' value='40'> Blue <input type='number' name='blue' min='0' max='255' value='10'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
-  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetoch'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>"; //erweitert um Firetorch
+  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetorch'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>";
+  message+="<form action='http://" + myIp + "/Dots1'><input type='submit' value='Dots1'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
+  message+="<form action='http://" + myIp + "/Dots2'><input type='submit' value='Dots2'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
+  message+="<form action='http://" + myIp + "/SlowMandala'><input type='submit' value='SlowMandala'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/SlowMandala2'><input type='submit' value='SlowMandala2'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/SlowMandala3'><input type='submit' value='SlowMandala3'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/Mandala8'><input type='submit' value='Mandala8'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/NoiseExample1'><input type='submit' value='NoiseExample1'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/NoiseExample2'><input type='submit' value='NoiseExample2'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/NoiseExample3'><input type='submit' value='NoiseExample3'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
+  message+="<form action='http://" + myIp + "/NoiseExample4'><input type='submit' value='NoiseExample4'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
   message+="</body></html>";
   server.send(200, "text/html", message);
   digitalWrite(led, 1);
@@ -151,6 +222,16 @@ void handleTheaterChaseRainbow(){resetArgs();handleArgs();selectedEffect=14;hand
 void handleTwinkleRandom(){resetArgs();handleArgs();selectedEffect=15;handleRoot();}
 void handleTwinkle(){resetArgs();handleArgs();selectedEffect=16;handleRoot();}
 void handleFiretorch(){resetArgs();handleArgs();selectedEffect=17;handleRoot();}
+void handleDots1(){resetArgs();handleArgs();selectedEffect=18;handleRoot();}
+void handleDots2(){resetArgs();handleArgs();selectedEffect=19;handleRoot();}
+void handleSlowMandala(){resetArgs();handleArgs();selectedEffect=20;handleRoot();}
+void handleSlowMandala2(){resetArgs();handleArgs();selectedEffect=21;handleRoot();}
+void handleSlowMandala3(){resetArgs();handleArgs();selectedEffect=22;handleRoot();}
+void handleMandala8(){resetArgs();handleArgs();selectedEffect=23;handleRoot();}
+void handleNoiseExample1(){resetArgs();handleArgs();selectedEffect=24;handleRoot();}
+void handleNoiseExample2(){resetArgs();handleArgs();selectedEffect=25;handleRoot();}
+void handleNoiseExample3(){resetArgs();handleArgs();selectedEffect=26;handleRoot();}
+void handleNoiseExample4(){resetArgs();handleArgs();selectedEffect=27;handleRoot();}
 void handlePowerLimit(){resetArgs();handleArgs();handleRoot();}
 
 void handleNotFound() {
@@ -175,28 +256,26 @@ void setup(void) {
   digitalWrite(led, 1);
   Serial.begin(115200);
 
-  pinMode(BUTTON, INPUT_PULLUP);
-  digitalWrite (BUTTON, HIGH);  // internal pull-up resistor
-  attachInterrupt (digitalPinToInterrupt (BUTTON), changeEffect, CHANGE); // pressed
+  pinMode(EFFECTBUTTON, INPUT_PULLUP);
+  digitalWrite (EFFECTBUTTON, HIGH);  // internal pull-up resistor
+  attachInterrupt (digitalPinToInterrupt (EFFECTBUTTON), changeEffect, CHANGE); // pressed
 
   pinMode(WLANBUTTON, INPUT_PULLUP);
-  digitalWrite (WLANBUTTON, HIGH);  // internal pull-up resistor
+  digitalWrite (WLANBUTTON, HIGH);
 
   WiFiManager wifiManager;
+  wifiManager.setConfigPortalTimeout(120); //timeout before falling back to softAP
 
-  wifiManager.setConfigPortalTimeout(180); //timeout before falling back to softAP
-
-  if(!wifiManager.autoConnect(ap_ssid, ap_pw)) {
-    Serial.println("failed to connect to station accesspoint and hit timeout");
+  if(!wifiManager.autoConnect(AP_SSID, AP_PW)) {
+    Serial.println("failed to connect to external accesspoint and hit timeout, enabling my own accesspoint");
     delay(3000);
-    setup_wifi_fallback_ap();      // creates local soft accesspoint if no external accesspoint found or configured
+    setup_wifi_fallback_ap();  // activate fallback soft Accesspoint
     } 
   else{
-    myIp = WiFi.localIP().toString();  //getting ip if connected to external accesspoint
+    myIp = WiFi.localIP().toString();  //getting IP if connected to external accesspoint
     }
   
-
-  if (mqtt_server && mqtt_enabled==1){  //check if mqtt server configured and mqtt support enabled
+  if (mqtt_server && mqtt_enabled==1){  //if mqtt-server is given and mqtt expicit enabled, than activating mqtt
     Serial.print("mqtt server: ");
     Serial.println(mqtt_server);
     client.setServer(mqtt_server, 1883);
@@ -204,10 +283,20 @@ void setup(void) {
     delay(1500);
     lastReconnectAttempt = 0;  
   }
-  else{
-  Serial.println("no mqtt-server specified or mqtt disabled, disabling complete mqtt support");
-  mqtt_enabled = 0;
+    else{
+    Serial.println("no mqtt-server specified or mqtt disabled, disabling complete mqtt support");
+    mqtt_enabled = 0;
   }
+
+  InitMSGEQ7();
+  // Initialize our noise coordinates to some random values
+  x_1 = random16();
+  y_1 = random16();
+  z_1 = random16();
+
+  x2 = random16();
+  y2 = random16();
+  z2 = random16();
 
 
   server.on("/", handleRoot);
@@ -229,45 +318,56 @@ void setup(void) {
   server.on("/theatrechaserainbow", handleTheaterChaseRainbow);
   server.on("/twinklerandom", handleTwinkleRandom);
   server.on("/twinkle", handleTwinkle);
-  server.on("/firetorch", handleFiretorch);  
+  server.on("/firetorch", handleFiretorch);
+  server.on("/Dots1", handleDots1);
+  server.on("/Dots2", handleDots2);
+  server.on("/SlowMandala", handleSlowMandala);
+  server.on("/SlowMandala2", handleSlowMandala2);
+  server.on("/SlowMandala3", handleSlowMandala3);
+  server.on("/Mandala8", handleMandala8);
+  server.on("/NoiseExample1", handleNoiseExample1);
+  server.on("/NoiseExample2", handleNoiseExample2);
+  server.on("/NoiseExample3", handleNoiseExample3);
+  server.on("/NoiseExample4", handleNoiseExample4);
   server.onNotFound(handleNotFound);
   server.begin();
-  Serial.print("HTTP server started");
-  FastLED.addLeds<WS2812, PIN, GRB>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
+  Serial.println("HTTP server started");
+  FastLED.addLeds<CHIPSET, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
+  FastLED.setBrightness(brightness);
 }
 
 void loop(void) {
   server.handleClient();
   checkForMessages();
-  FastLED.setMaxPowerInMilliWatts(PowerLimit);
+  FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
+  FastLED.setBrightness(brightness);
 
-  if ( digitalRead(BUTTON) == LOW ) {
+  if ( digitalRead(EFFECTBUTTON) == LOW ) {
     changeEffect;
   }
   
-  if ( digitalRead(WLANBUTTON) == LOW ) {  //if PIN is connected to ground, the wifimanager is called and wifi credentials are resetted
+  if ( digitalRead(WLANBUTTON) == LOW ) {
+      Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
       WiFiManager wifiManager;
       wifiManager.resetSettings();
       
-    if (!wifiManager.startConfigPortal("OnDemandAP")) {
+    if (!wifiManager.startConfigPortal(AP_SSID, AP_PW)) {
       Serial.println("failed to connect and hit timeout");
       delay(3000);
       //reset and try again, or maybe put it to deep sleep
       ESP.reset();
       delay(5000);
       }
-
     //if you get here you have connected to the WiFi
     Serial.println("connected...yeey :)");
   }
   
-  
-    if (!client.connected() && mqtt_enabled==1) {  //if mqtt server disconnected and mqtt support enabled
+    if (!client.connected() && mqtt_enabled==1) {  //if disconnected from mqtt-server AND mqtt-support is enabled
     long now = millis();
     if (now - lastReconnectAttempt > 5000) {
       lastReconnectAttempt = now;
-      // Attempt to reconnect
+      // Attempt to reconnect to mqtt-server
       if (reconnect()) {
         lastReconnectAttempt = 0;
       }
@@ -295,19 +395,74 @@ void loop(void) {
     case 14 : {theaterChaseRainbow();break;}
     case 15 : {TwinkleRandom();break;}
     case 16 : {Twinkle();break;}
-    case 17 : {firetorch();break;}    
+    case 17 : {firetorch();break;} 
+    case 18 : {Dots1();break;} 
+    case 19 : {Dots2();break;}  
+    case 20 : {SlowMandala();break;}
+    case 21 : {SlowMandala2();break;}
+    case 22 : {SlowMandala3();break;}
+    case 23 : {Mandala8();break;}
+    case 24 : {NoiseExample1();break;}
+    case 25 : {NoiseExample2();break;}
+    case 26 : {NoiseExample3();break;}
+    case 27 : {NoiseExample4();break;}
+    case 28 : {MetaBalls();break;}
+    case 29 : {setAll(red,green,blue);break;}
+    case 30 : {NoiseExample5();break;}
+    case 31 : {NoiseExample6();break;}
+  }
+}
+
+void setEffectParameters(){  //you can set individual parameters for every effect/lightprogram; this function should be called once at start of a program
+  switch(selectedEffect) {
+    case 1  : {break;}
+    case 2  : {break;}
+    case 3  : {break;}
+    case 4  : {break;}
+    case 5  : {break;}
+    case 6  : {break;}
+    case 7  : {break;}
+    case 8  : {break;}
+    case 9  : {break;}
+    case 10 : {break;}
+    case 11 : {break;}
+    case 12 : {break;}
+    case 13 : {break;}
+    case 14 : {break;}
+    case 15 : {break;}
+    case 16 : {break;}
+    case 17 : {break;} 
+    case 18 : {Speed=50;break;} 
+    case 19 : {Speed=50;break;}  
+    case 20 : {Speed=100;break;}
+    case 21 : {Speed=100;break;}
+    case 22 : {Speed=100;break;}
+    case 23 : {Speed=100;break;}
+    case 24 : {break;}
+    case 25 : {break;}
+    case 26 : {break;}
+    case 27 : {break;}
+    case 28 : {break;}
+    case 29 : {red=128;green=128;blue=128;break;}
+    case 30 : {break;}
   }
 }
 
 void changeEffect() {
-  if (digitalRead (BUTTON) == HIGH) {
-    selectedEffect++;
-    //digitalWrite(D0, LOW); delay(100);
-    /*Serial.print(" Reset detected:");
-    Serial.print(D0);
-    Serial.println();*/
-  }
+  if (selectedEffect >MAXIMUMEFFECTS){
+    selectedEffect=1;
+    }
+    else
+    {
+    selectedEffect++;    
+    }
+      Serial.println("Effect Program No.: ");
+      Serial.print(selectedEffect);
+      Serial.println(" ");
+    setEffectParameters();
 }
+
+
 
 void colorWipe(){
   currentMillis = millis();
@@ -747,6 +902,1302 @@ uint8_t easy_random() {
     return (uint8_t) m;
 }
 
+//------Code from FunkyCloudsCompendium-------------------------------
+
+// all examples together
+void AutoRun() {
+  
+  // all oscillator based: Serial.println("Dots1");
+   for(int i = 0; i < 300; i++) {Dots1();}
+   Serial.println("Dots2");
+   for(int i = 0; i < 300; i++) {Dots2();}
+   Serial.println("SlowMandala");
+   SlowMandala();
+   Serial.println("SlowMandala2");
+   SlowMandala2();
+   Serial.println("SlowMandala3");
+   SlowMandala3();
+   Serial.println("SlowMandala8");
+   for(int i = 0; i < 300; i++) {Mandala8();}
+   
+   // all MSGEQ7 based:
+   Serial.println("MSGEQtest");
+   for(int i = 0; i < 500; i++) {MSGEQtest();}
+   Serial.println("MSGEQtest2");
+   for(int i = 0; i < 500; i++) {MSGEQtest2();}
+   Serial.println("MSGEQtest3");
+   for(int i = 0; i < 500; i++) {MSGEQtest3();}
+   Serial.println("MSGEQtest4");
+   for(int i = 0; i < 500; i++) {MSGEQtest4();}
+   Serial.println("Audiospiral");
+   for(int i = 0; i < 500; i++) {AudioSpiral();}
+   Serial.println("MSGEQtest5");
+   for(int i = 0; i < 500; i++) {MSGEQtest5();}
+   Serial.println("MSGEQtest6");
+   for(int i = 0; i < 500; i++) {MSGEQtest6();}
+   Serial.println("MSGEQtest7");
+   for(int i = 0; i < 500; i++) {MSGEQtest7();}
+   Serial.println("MSGEQtest8");
+   for(int i = 0; i < 500; i++) {MSGEQtest8();}
+   Serial.println("MSGEQtest9");
+   for(int i = 0; i < 500; i++) {MSGEQtest9();}
+   Serial.println("CopyTest");
+   for(int i = 0; i < 500; i++) {CopyTest();}
+   Serial.println("Audio1");
+   for(int i = 0; i < 500; i++) {Audio1();}
+   Serial.println("Audio2");
+   for(int i = 0; i < 500; i++) {Audio2();}
+   Serial.println("Audio3");
+   for(int i = 0; i < 500; i++) {Audio3();}
+   Serial.println("Audio4");
+   for(int i = 0; i < 500; i++) {Audio4();}
+   Serial.println("CaleidoTest1");
+   for(int i = 0; i < 500; i++) {CaleidoTest1();}
+   Serial.println("CaleidoTest2");
+   for(int i = 0; i < 500; i++) {CaleidoTest2();}
+   Serial.println("Audio5");
+   for(int i = 0; i < 500; i++) {Audio5();}
+   Serial.println("Audio6");
+   for(int i = 0; i < 500; i++) {Audio6();}
+   
+   Serial.println("NoiseExample1");
+   for(int i = 0; i < 500; i++) {NoiseExample1();}
+   Serial.println("NoiseExample2");
+   for(int i = 0; i < 500; i++) {NoiseExample2();}
+   Serial.println("NoiseExample3");
+   for(int i = 0; i < 500; i++) {NoiseExample3();}
+   //Serial.println("SpeedTest");
+   //SpeedTest();
+   Serial.println("NoiseExample4");
+   for(int i = 0; i < 500; i++) {NoiseExample4();}
+   Serial.println("NoiseExample5");
+   for(int i = 0; i < 500; i++) {NoiseExample5();}
+   Serial.println("NoiseExample6");
+   for(int i = 0; i < 500; i++) {NoiseExample6();}
+   
+   Serial.println("NoiseExample7");
+   for(int i = 0; i < 500; i++) {NoiseExample7();}
+}
+
+/*
+-------------------------------------------------------------------
+ Basic Helper functions:
+ 
+ XY                  translate 2 dimensional coordinates into an index
+ Line                draw a line
+ Pixel               draw a pixel
+ ClearAll            empty the screenbuffer
+ MoveOscillators     increment osci[] and calculate p[]=sin8(osci)
+ InitMSGEQ7          activate the MSGEQ7 
+ ReadAudio           get data from MSGEQ7 into left[7] and right[7]
+ 
+ -------------------------------------------------------------------
+ */
+
+// translates from x, y into an index into the LED array and
+// finds the right index for a S shaped matrix
+int XY(int x, int y) { 
+  if(y > HEIGHT) { 
+    y = HEIGHT; 
+  }
+  if(y < 0) { 
+    y = 0; 
+  }
+  if(x> WIDTH) { 
+   x= WIDTH;
+  } 
+  if(x < 0) { 
+    x = 0; 
+  }
+  // for a serpentine layout reverse every 2nd row:
+  if(x % 2 == 1) {  
+    return (x * (WIDTH) + (HEIGHT - y -1)); 
+  } 
+  else { 
+    // use that line only, if you have all rows beginning at the same side
+    return (x * (WIDTH) + y); 
+  }
+}
+
+// Bresenham line algorythm based on 2 coordinates
+void Line(int x0, int y0, int x1, int y1, byte color) {
+  int dx = abs(x1-x0), sx = x0 < x1 ? 1 : -1;
+  int dy = -abs(y1-y0), sy = y0 < y1 ? 1 : -1;
+  int err = dx + dy, e2; 
+  for(;;) {  
+    leds[XY(x0, y0)] = CHSV(color, 255, 255);
+    if (x0 == x1 && y0 == y1) break;
+    e2 = 2 * err;
+    if (e2 > dy) { 
+      err += dy; 
+      x0 += sx; 
+    } 
+    if (e2 < dx) { 
+      err += dx; 
+      y0 += sy; 
+    } 
+  }
+}
+
+// write one pixel with HSV color to coordinates
+void Pixel(int x, int y, byte color) {
+  leds[XY(x, y)] = CHSV(color, 255, 255);
+}
+
+// delete the screenbuffer
+void ClearAll()  
+{
+  for(int i = 0; i < NUM_LEDS; i++) {
+    leds[i] = 0;
+  }
+}
+
+/*
+Oscillators and Emitters
+ */
+
+// set the speeds (and by that ratios) of the oscillators here
+void MoveOscillators() {
+  osci[0] = osci[0] + 5;
+  osci[1] = osci[1] + 2;
+  osci[2] = osci[2] + 3;
+  osci[3] = osci[3] + 4;
+  for(int i = 0; i < 4; i++) { 
+    p[i] = sin8(osci[i]) / 17;  //why 17? to keep the result in the range of 0-15 (matrix size)
+  }
+}
+
+// wake up the MSGEQ7
+void InitMSGEQ7() {
+  pinMode(MSGEQ7_RESET_PIN, OUTPUT);      
+  pinMode(MSGEQ7_STROBE_PIN, OUTPUT);   
+  digitalWrite(MSGEQ7_RESET_PIN, LOW);     
+  digitalWrite(MSGEQ7_STROBE_PIN, HIGH); 
+}
+
+// get the data from the Speed
+// (still fucking slow...)
+void ReadAudio() {
+  digitalWrite(MSGEQ7_RESET_PIN, HIGH);
+  digitalWrite(MSGEQ7_RESET_PIN, LOW);
+  for(byte band = 0; band < 7; band++) {
+    digitalWrite(MSGEQ7_STROBE_PIN, LOW); 
+    delayMicroseconds(30); 
+    left[band] = analogRead(AUDIO_LEFT_PIN); 
+    right[band] = analogRead(AUDIO_RIGHT_PIN); 
+    digitalWrite(MSGEQ7_STROBE_PIN, HIGH);
+  }
+}
+
+/*
+-------------------------------------------------------------------
+ Functions for manipulating existing data within the screenbuffer:
+ 
+ DimAll           scales the brightness of the screenbuffer down
+ Caleidoscope1    mirror one quarter to the other 3 (and overwrite them)
+ Caleidoscope2    rotate one quarter to the other 3 (and overwrite them)
+ Caleidoscope3    useless bullshit?!
+ Caleidoscope4    rotate and add the complete screenbuffer 3 times
+ Caleidoscope5    copy a triangle from the first quadrant to the other half
+ Caleidoscope6
+ SpiralStream     stream = give it a nice fading tail
+ HorizontalStream
+ VerticalStream
+ VerticalMove     move = just move it as it is one line down
+ Copy             copy a rectangle
+ RotateTriangle   copy + rotate a triangle (in 8*8)
+ MirrorTriangle   copy + mirror a triangle (in 8*8)
+ RainbowTriangle  static draw for debugging
+ 
+ -------------------------------------------------------------------
+ */
+
+// scale the brightness of the screenbuffer down
+void DimAll(byte value)  
+{
+  for(int i = 0; i < NUM_LEDS; i++) {
+    leds[i].nscale8(value);
+  }
+}
+
+/*
+Caleidoscope1 mirrors from source to A, B and C
+ 
+ y
+ 
+ |       |
+ |   B   |   C
+ |_______________
+ |       |
+ |source |   A
+ |_______________ x
+ 
+ */
+void Caleidoscope1() {
+  for(int x = 0; x < WIDTH / 2 ; x++) {
+    for(int y = 0; y < HEIGHT / 2; y++) {
+      leds[XY( WIDTH - 1 - x, y )] = leds[XY( x, y )];              // copy to A
+      leds[XY( x, HEIGHT - 1 - y )] = leds[XY( x, y )];             // copy to B
+      leds[XY( WIDTH - 1 - x, HEIGHT - 1 - y )] = leds[XY( x, y )]; // copy to C
+    }
+  }
+}
+
+/*
+Caleidoscope2 rotates from source to A, B and C
+ 
+ y
+ 
+ |       |
+ |   C   |   B
+ |_______________
+ |       |
+ |source |   A
+ |_______________ x
+ 
+ */
+void Caleidoscope2() {
+  for(int x = 0; x < WIDTH / 2 ; x++) {
+    for(int y = 0; y < HEIGHT / 2; y++) {
+      leds[XY( WIDTH - 1 - x, y )] = leds[XY( y, x )];    // rotate to A
+      leds[XY( WIDTH - 1 - x, HEIGHT - 1 - y )] = leds[XY( x, y )];    // rotate to B
+      leds[XY( x, HEIGHT - 1 - y )] = leds[XY( y, x )];    // rotate to C
+    }
+  }
+}
+
+// adds the color of one quarter to the other 3
+void Caleidoscope3() {
+  for(int x = 0; x < WIDTH / 2 ; x++) {
+    for(int y = 0; y < HEIGHT / 2; y++) {
+      leds[XY( WIDTH - 1 - x, y )] += leds[XY( y, x )];    // rotate to A
+      leds[XY( WIDTH - 1 - x, HEIGHT - 1 - y )] += leds[XY( x, y )];    // rotate to B
+      leds[XY( x, HEIGHT - 1 - y )] += leds[XY( y, x )];    // rotate to C
+    }
+  }
+}
+
+// add the complete screenbuffer 3 times while rotating
+void Caleidoscope4() {
+  for(int x = 0; x < WIDTH ; x++) {
+    for(int y = 0; y < HEIGHT ; y++) {
+      leds[XY( WIDTH - 1 - x, y )] += leds[XY( y, x )];    // rotate to A
+      leds[XY( WIDTH - 1 - x, HEIGHT - 1 - y )] += leds[XY( x, y )];    // rotate to B
+      leds[XY( x, HEIGHT - 1 - y )] += leds[XY( y, x )];    // rotate to C
+    }
+  }
+}
+
+// rotate, duplicate and copy over a triangle from first sector into the other half
+// (crappy code)
+void Caleidoscope5() {
+  for(int x = 1; x < 8 ; x++) {
+    leds[XY(7 - x, 7 )] += leds[XY(x, 0)]; 
+  } //a
+  for(int x = 2; x < 8 ; x++) {
+    leds[XY(7 - x, 6 )] += leds[XY(x, 1)]; 
+  } //b
+  for(int x = 3; x < 8 ; x++) {
+    leds[XY(7 - x, 5 )] += leds[XY(x, 2)]; 
+  } //c
+  for(int x = 4; x < 8 ; x++) {
+    leds[XY(7 - x, 4 )] += leds[XY(x, 3)]; 
+  } //d
+  for(int x = 5; x < 8 ; x++) {
+    leds[XY(7 - x, 3 )] += leds[XY(x, 4)]; 
+  } //e
+  for(int x = 6; x < 8 ; x++) {
+    leds[XY(7 - x, 2 )] += leds[XY(x, 5)]; 
+  } //f
+  for(int x = 7; x < 8 ; x++) {
+    leds[XY(7 - x, 1 )] += leds[XY(x, 6)]; 
+  } //g
+}
+
+
+void Caleidoscope6() {
+  for(int x = 1; x < 8 ; x++) {
+    leds[XY(7 - x, 7 )] = leds[XY(x, 0)]; 
+  } //a
+  for(int x = 2; x < 8 ; x++) {
+    leds[XY(7 - x, 6 )] = leds[XY(x, 1)]; 
+  } //b
+  for(int x = 3; x < 8 ; x++) {
+    leds[XY(7 - x, 5 )] = leds[XY(x, 2)]; 
+  } //c
+  for(int x = 4; x < 8 ; x++) {
+    leds[XY(7 - x, 4 )] = leds[XY(x, 3)]; 
+  } //d
+  for(int x = 5; x < 8 ; x++) {
+    leds[XY(7 - x, 3 )] = leds[XY(x, 4)]; 
+  } //e
+  for(int x = 6; x < 8 ; x++) {
+    leds[XY(7 - x, 2 )] = leds[XY(x, 5)]; 
+  } //f
+  for(int x = 7; x < 8 ; x++) {
+    leds[XY(7 - x, 1 )] = leds[XY(x, 6)]; 
+  } //g
+}
+
+// create a square twister
+// x and y for center, r for radius
+void SpiralStream(int x,int y, int r, byte dim) {  
+  for(int d = r; d >= 0; d--) {                // from the outside to the inside
+    for(int i = x-d; i <= x+d; i++) {
+      leds[XY(i,y-d)] += leds[XY(i+1,y-d)];   // lowest row to the right
+      leds[XY(i,y-d)].nscale8( dim );
+    }
+    for(int i = y-d; i <= y+d; i++) {
+      leds[XY(x+d,i)] += leds[XY(x+d,i+1)];   // right colum up
+      leds[XY(x+d,i)].nscale8( dim );
+    }
+    for(int i = x+d; i >= x-d; i--) {
+      leds[XY(i,y+d)] += leds[XY(i-1,y+d)];   // upper row to the left
+      leds[XY(i,y+d)].nscale8( dim );
+    }
+    for(int i = y+d; i >= y-d; i--) {
+      leds[XY(x-d,i)] += leds[XY(x-d,i-1)];   // left colum down
+      leds[XY(x-d,i)].nscale8( dim );
+    }
+  }
+}
+
+// give it a linear tail to the side
+void HorizontalStream(byte scale)  
+{
+  for(int x = 1; x < WIDTH ; x++) {
+    for(int y = 0; y < HEIGHT; y++) {
+      leds[XY(x,y)] += leds[XY(x-1,y)];
+      leds[XY(x,y)].nscale8( scale );
+    }
+  }
+  for(int y = 0; y < HEIGHT; y++) 
+    leds[XY(0,y)].nscale8(scale);
+}
+
+// give it a linear tail downwards
+void VerticalStream(byte scale)  
+{
+  for(int x = 0; x < WIDTH ; x++) {
+    for(int y = 1; y < HEIGHT; y++) {
+      leds[XY(x,y)] += leds[XY(x,y-1)];
+      leds[XY(x,y)].nscale8( scale );
+    }
+  }
+  for(int x = 0; x < WIDTH; x++) 
+    leds[XY(x,0)].nscale8(scale);
+}
+
+// just move everything one line down
+void VerticalMove() {
+  for(int y = 15; y > 0; y--) {
+    for(int x = 0; x < 16; x++) {
+      leds[XY(x, y)] = leds[XY(x, y-1)];
+    }
+  }
+}
+
+// copy the rectangle defined with 2 points x0, y0, x1, y1
+// to the rectangle beginning at x2, x3
+void Copy(byte x0, byte y0, byte x1, byte y1, byte x2, byte y2) {
+  for(int y = y0; y < y1+1; y++) {
+    for(int x = x0; x < x1+1; x++) {
+      leds[XY(x+x2-x0, y + y2-y0)] = leds[XY(x, y)];
+    }
+  }
+}
+
+// rotate + copy triangle (8*8)
+void RotateTriangle() {
+  for(int x = 1; x < 8; x++) {
+    for(int y = 0; y<x; y++) {
+      leds[XY(x, 7-y)] = leds[XY(7-x, y)];
+    }
+  }
+}
+
+// mirror + copy triangle (8*8)
+void MirrorTriangle() {
+  for(int x = 1; x < 8; x++) {
+    for(int y = 0; y<x; y++) {
+      leds[XY(7-y, x)] = leds[XY(7-x, y)];
+    }
+  }
+}
+
+// draw static rainbow triangle pattern (8x8)
+// (just for debugging)
+void RainbowTriangle() {
+  for(int i = 0; i < 8; i++) {
+    for(int j = 0; j<=i; j++) {
+      Pixel(7-i, j, i*j*4); 
+    }
+  }
+}
+
+
+// 2 oscillators flying arround one ;)
+void Dots1() {
+  currentMillis = millis();
+/*  Serial.print("Dots1 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("Dots1 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    MoveOscillators();
+    //2 lissajous dots red
+    leds[XY(p[0],p[1])] = CHSV (1 , 255, 255);
+    leds[XY(p[2],p[3])] = CHSV (1 , 255, 150); 
+    //average of the coordinates in yellow
+    Pixel((p[2]+p[0])/2, (p[1]+p[3])/2, 50);
+    ShowFrame();
+    FastLED.delay(20);
+    HorizontalStream(125);
+  }
+}
+
+// x and y based on 3 sine waves
+void Dots2() {
+  currentMillis = millis();
+/*  Serial.print("Dots2 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("Dots2 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    MoveOscillators();
+    Pixel((p[2]+p[0]+p[1])/3, (p[1]+p[3]+p[2])/3, osci[3]);
+    ShowFrame();
+    FastLED.delay(20);
+    HorizontalStream(125);
+  }
+}
+
+// red, 4 spirals, one dot emitter
+// demonstrates SpiralStream and Caleidoscope
+// (psychedelic)
+
+void SlowMandala() {
+  currentMillis = millis();
+  Serial.print("SlowMandala currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("SlowMandala prevMillis: ");
+  Serial.println(prevMillis);
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;     
+    if (i>=16){i=0;}else{i++;}  
+      for(int j = 0; j < 16; j++) {
+        Pixel(i,j,1);
+        SpiralStream(4, 4, 4, 127);
+        Caleidoscope1();
+        ShowFrame();
+        FastLED.delay(50);
+      }
+  }
+}
+
+// beautifull but periodic
+void SlowMandala2() {
+    currentMillis = millis();
+/*  Serial.print("SlowMandala2 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("SlowMandala2 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis; 
+    if (i>=8){i=0;}else{i++;}  
+      for(int j = 0; j < 16; j++) {
+        MoveOscillators();
+        Pixel(j,i, (osci[0]+osci[1])/2);
+        SpiralStream(4, 4, 4, 127);
+        Caleidoscope2();
+        ShowFrame();
+        FastLED.delay(20);
+      }
+  }
+}
+
+
+// same with a different timing
+void SlowMandala3() {
+    currentMillis = millis();
+/*  Serial.print("SlowMandala3 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("SlowMandala3 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    if (i>=16){i=0;}else{i++;}   
+      for(int j = 0; j < 16; j++) {
+        MoveOscillators();
+        Pixel(j,j, (osci[0]+osci[1])/2);
+        SpiralStream(4, 4, 4, 127);
+        Caleidoscope2();
+        ShowFrame();
+        FastLED.delay(20);
+      }
+  }
+}
+
+// 2 lissajou dots *2 *4
+void Mandala8() {
+  currentMillis = millis();
+/*  Serial.print("Mandala8 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("Mandala8 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+  MoveOscillators();
+  Pixel(p[0]/2, p[1]/2, osci[2]);
+  Pixel(p[2]/2, p[3]/2, osci[3]);
+  Caleidoscope5();
+  Caleidoscope2();
+  HorizontalStream(110);
+  ShowFrame();
+  }
+}
+
+// colorfull 2 chanel 7 band analyzer
+void MSGEQtest() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Pixel(i, 16-left[i]/64, left[i]/4);
+  }
+  for(int i = 0; i < 7; i++) {
+    Pixel(8+i, 16-right[i]/64, right[i]/4);
+  }  
+  ShowFrame();
+  VerticalStream(120);
+}
+
+// 2 frequencies linked to dot emitters in a spiral mandala
+void MSGEQtest2() {
+  ReadAudio();
+  if (left[0]>500) {
+    Pixel(0,0,1);
+    Pixel(1,1,1);
+  }
+  if (left[2]>200) {
+    Pixel(2,2,100);
+  }
+  if (left[6]>200) {
+    Pixel(5,0,200);
+  }
+  SpiralStream(4, 4, 4, 127);
+  Caleidoscope1();
+  ShowFrame();
+}
+
+// analyzer 2 bars
+void MSGEQtest3() {
+  ReadAudio();
+  for(int i = 0; i < 8; i++) {
+    Pixel(i, 16-left[0]/64, 1);
+  }
+  for(int i=8; i < 16; i++) {
+    Pixel(i, 16-left[4]/64, 100);
+  }
+  ShowFrame();
+  VerticalStream(120);
+}
+
+// analyzer x 4 (as showed on youtube)
+void MSGEQtest4() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Pixel(7-i, 8-right[i]/128, i*10);
+  } 
+  Caleidoscope2();
+  ShowFrame();
+  DimAll(240);
+}
+
+// basedrum/snare linked to red/green emitters
+void AudioSpiral() {
+  MoveOscillators();
+  SpiralStream(7, 7, 7, 130); 
+  SpiralStream(4, 4, 4, 122);
+  SpiralStream(11, 11, 3, 122);
+  ReadAudio();
+  if (left[1] > 500) {
+    leds[2,1] = CHSV (1 , 255, 255);
+  }  
+  if (left[4] > 500) {
+    leds[XY(random(15),random(15))] = CHSV (100 , 255, 255);
+  }  
+  ShowFrame();
+  DimAll(250);
+} 
+
+// one channel 7 band spectrum analyzer (spiral fadeout)
+void MSGEQtest5() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Line(2*i, 16-left[i]/64, 2*i, 15, i*10);
+    Line(1+2*i, 16-left[i]/64, 1+2*i, 15, i*10);  
+  }
+  ShowFrame();
+  SpiralStream(7, 7, 7, 120);
+}
+
+// classic analyzer, slow falldown
+void MSGEQtest6() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Line(2*i, 16-left[i]/64, 2*i, 15, i*10);
+    Line(1+2*i, 16-left[i]/64, 1+2*i, 15, i*10);  
+  }
+  ShowFrame();
+  VerticalStream(170);
+}
+
+// geile Scheiße
+// spectrum mandala, color linked to 160Hz band
+void MSGEQtest7() {
+  MoveOscillators();
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Pixel(7-i, 8-right[i]/128, i*10+right[1]/8);
+  } 
+  Caleidoscope5();
+  Caleidoscope1();
+  ShowFrame();
+  DimAll(240);
+}
+
+// spectrum mandala, color linked to osci
+void MSGEQtest8() {
+  MoveOscillators();
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Pixel(7-i, 8-right[i]/128, i*10+osci[1]);
+  } 
+  Caleidoscope5();
+  Caleidoscope2();
+  ShowFrame();
+  DimAll(240);
+}
+
+// falling spectogram
+void MSGEQtest9() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    leds[XY(i*2,0)] = CHSV(i*27, 255, right[i]/3); // brightness should be divided by 4
+    leds[XY(1+i*2,0)] = CHSV(i*27, 255, left[i]/3);
+  }
+  leds[XY(14,0)] = 0;
+  leds[XY(15,0)] = 0; 
+  ShowFrame();
+  VerticalMove();
+}
+
+// 9 analyzers
+void CopyTest() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(i, 4- left[i]/256, i, 4, i*10);  
+  }
+  Copy(0,0, 4, 4, 5, 0);
+  Copy(0,0, 4, 4, 10, 0);
+  Copy(0,0,14,4,0,5);
+  Copy(0,0, 14, 4, 0, 10);
+  ShowFrame();
+  DimAll(200);
+}
+
+// test scale
+// NOT WORKING as intended YET!
+void CopyTest2() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(i*2, 4- left[i]/128, i*2, 4, i*10);  
+  }
+  Scale(0,0, 4, 4, 
+  7,7, 15, 15);
+  ShowFrame();
+  DimAll(200);
+
+}
+
+// rechtangle 0-1 -> 2-3
+// NOT WORKING as intended YET!
+void Scale(int x0, int y0, int x1, int y1, int x2, int y2 ,int x3, int y3) {
+  for(int y = y2; y < y3+1; y++) {
+    for(int x = x2; x < x3+1; x++) {
+      leds[XY(x,y)] = leds[XY( 
+      x0 + ( (x * (x1-x0)) / (x3-x1) ), 
+      y0 + ( (y * (y1-y0)) / (y3-y1) ) )];
+    }
+  }
+}
+
+// line spectogram mandala
+void Audio1() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(3*i, 16-left[i]/64, 3*(i+1), 16-left[i+1]/64, 255-i*15);
+  }
+  Caleidoscope4();
+  ShowFrame();
+  DimAll(10);
+}
+
+// line analyzer with stream
+void Audio2() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(3*i, 16-left[i]/64, 3*(i+1), 16-left[i+1]/64, 255-i*15);
+  }
+  ShowFrame();
+  HorizontalStream(120);
+}
+
+void Audio3() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    leds[XY(6-i,right[i]/ 128)] = CHSV(i*27, 255, right[i]);
+  } // brightness should be divided by 4
+  Caleidoscope6();
+  Caleidoscope2();
+  ShowFrame();
+  DimAll(255);
+}
+
+void Audio4() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(3*i, 8-left[i]/128, 3*(i+1), 8-left[i+1]/128, i*left[i]/32);
+  }
+  Caleidoscope4();
+  ShowFrame();
+  DimAll(12);
+}
+
+void CaleidoTest1() {
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Line(i, left[i]/256, i,0,left[i]/32);
+  } 
+  RotateTriangle();
+  Caleidoscope2();  //copy + rotate
+  ShowFrame();
+  DimAll(240);
+}
+
+void CaleidoTest2() {
+  MoveOscillators();
+  ReadAudio();
+  for(int i = 0; i < 7; i++) {
+    Line(i, left[i]/200, i, 0, (left[i]/16)+150);
+  } 
+  MirrorTriangle();
+  Caleidoscope1();  //mirror + rotate
+  ShowFrame();
+  DimAll(240);
+}
+
+void Audio5() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(
+    3 * i, 8 - left[i] / 128,        // from
+    3 * (i+1), 8 - left[i+1] / 128,  // to
+    i * 30); 
+  }                       // color
+  Caleidoscope4();
+  ShowFrame();
+  DimAll(9);
+}
+
+void Audio6() {
+  ReadAudio();
+  for(int i = 0; i < 5; i++) {
+    Line(
+    3 * i, 8 - left[i] / 128,        // from
+    3 * (i+1), 8 - left[i+1] / 128,  // to
+    i * 10);                         // lolor
+    Line(
+    15-(3 * i), 7 + left[i] / 128,        // from
+    15-(3 * (i+1)), 7 + left[i+1] / 128,  // to
+    i * 10);                              // color
+  }  
+  ShowFrame();
+  DimAll(200);
+  //ClearAll();
+}
+
+
+/*
+-------------------------------------------------------------------
+ Testcode for mapping the 16*16 calculation buffer to your
+ custom matrix size
+ -------------------------------------------------------------------
+ 
+ */
+// describe your matrix layout here:
+// P.S. If you use a 8*8 just remove the */ and /*
+/*
+void RenderCustomMatrix() {
+  for(int x = 0; x < CUSTOM_WIDTH; x++) {
+    for(int y = 0; y < CUSTOM_HEIGHT; y++) {
+      // position in the custom array
+      leds2[x + x * y] = 
+        // positions(s) in the source 16*16
+      // in this example it interpolates between just 2 diagonal touching pixels
+      (leds[XY(x*2, y*2)] +            // first point added to
+      leds[XY(1+(x*2), 1+(y*2))])    // second point
+        ;                         // divided by 2 to get the average color
+    }
+  }
+}
+*/
+
+void ShowFrame() {
+  // when using a matrix different than 16*16 use 
+  // RenderCustomMatrix();
+  showStrip();
+  //FastLED.show();
+  //LEDS.countFPS();
+}
+
+
+void fillnoise8() {
+  for(int i = 0; i < MAX_DIMENSION; i++) {
+    int ioffset = scale * i;
+    for(int j = 0; j < MAX_DIMENSION; j++) {
+      int joffset = scale * j;
+      noise[i][j] = inoise8(x_1 + ioffset,y_1 + joffset,z_1);
+    }
+  }
+  y_1 += speed;
+  //z += 2;
+}
+
+
+void fillnoise82() {
+  for(int i = 0; i < MAX_DIMENSION; i++) {
+    int ioffset = scale2 * i;
+    for(int j = 0; j < MAX_DIMENSION; j++) {
+      int joffset = scale2 * j;
+      noise2[i][j] = inoise8(x2 + ioffset,y2 + joffset,z2);
+    }
+  }
+  y2 += speed*3;
+  //z += 2;
+}
+
+void NoiseExample1() {
+    currentMillis = millis();
+/*  Serial.print("NoiseExample1 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample1 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    MoveOscillators();
+    scale2 = 30+p[1]*3;
+    x_1 = p[0]*16;
+    fillnoise8();
+    fillnoise82();
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = 
+          CHSV(noise[i][j]<<1,255,(noise2[i][j]+noise[i][j])/2);
+      }
+    }
+    ShowFrame();
+  }
+}
+
+void FillNoise(uint16_t x, uint16_t y,uint16_t z,uint16_t scale) {
+  for(int i = 0; i < MAX_DIMENSION; i++) {
+    int ioffset = scale * i;
+    for(int j = 0; j < MAX_DIMENSION; j++) {
+      int joffset = scale * j;
+      noise[i][j] = inoise8(x + ioffset,y + joffset,z);
+    }
+  }
+}
+
+void NoiseExample2() { 
+      currentMillis = millis();
+/*  Serial.print("NoiseExample2 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample2 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    MoveOscillators();
+    FillNoise(2000-p[2]*100,100,100,100);
+    for(int i = 0; i < p[2]; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = CRGB(noise[i][j],0,0);
+      }
+    }
+    for(int i = 0; i < p[1]; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(j,i)] += CRGB(0, 0, noise[i][j]);
+      }
+    }
+    ShowFrame();
+    ClearAll();
+  }
+}
+
+void NoiseExample3() { 
+        currentMillis = millis();
+/*  Serial.print("NoiseExample3 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample3 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+  MoveOscillators();
+  FillNoise(p[1]*100,p[2]*100,100,100);
+  for(int i = 0; i < p[1]; i++) {
+    for(int j = 0; j < kMatrixHeight; j++) {
+      leds[XY(i,j)] = CHSV(noise[i][j],255,200);
+    }
+  }
+
+  for(int i = 0; i < p[3]; i++) {
+    for(int j = 0; j < kMatrixHeight; j++) {
+      leds[XY(j,i)] += CHSV(128+noise[i][j],255,200);
+    }
+  }
+
+  ShowFrame();
+  ClearAll();
+  }
+}
+
+void SpeedTest() {
+  ReadAudio();
+  ShowFrame();
+}
+
+void NoiseExample4() { 
+        currentMillis = millis();
+/*  Serial.print("NoiseExample4 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample4 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+  MoveOscillators();
+  FillNoise(100,100,100,100);
+  for(int i = 0; i < p[0]+1; i++) {
+    for(int j = 0; j < kMatrixHeight; j++) {
+      leds[XY(i,j)] += CHSV(noise[i][j+p[2]],255,255);
+    }
+  }
+  ShowFrame();
+  ClearAll();
+  }
+}
+
+void ReadAudio2() {
+  digitalWrite(MSGEQ7_RESET_PIN, HIGH);
+  digitalWrite(MSGEQ7_RESET_PIN, LOW);
+  for(byte band = 0; band < 7; band++) {
+    digitalWrite(MSGEQ7_STROBE_PIN, LOW); 
+    delayMicroseconds(30); 
+    left[band] = analogRead(AUDIO_LEFT_PIN)/4; 
+    right[band] = analogRead(AUDIO_RIGHT_PIN)/4; 
+    digitalWrite(MSGEQ7_STROBE_PIN, HIGH);
+  }
+}
+
+
+void NoiseExample5() { 
+        currentMillis = millis();
+  Serial.print("NoiseExample5 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample5 prevMillis: ");
+  Serial.println(prevMillis);
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+  MoveOscillators();
+  ReadAudio();
+  FillNoise(100,100,100,300);
+
+  for(int i = 0; i < kMatrixWidth; i++) {
+    for(int j = 0; j < left[1]/64; j++) {
+      leds[XY(i,15-j)] = CRGB(0,noise[i][left[1]/64-j],0);
+    }
+  }
+
+  for(int i = 0; i < kMatrixWidth; i++) {
+    for(int j = 0; j < left[5]/64; j++) {
+      leds[XY(j,i)] += CRGB(noise[i][left[5]/64-j],0,0);
+    }
+  }
+  ShowFrame();
+  ClearAll();
+  }
+}
+
+void NoiseExample6() { 
+        currentMillis = millis();
+/*  Serial.print("NoiseExample6 currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("NoiseExample6 prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+  //MoveOscillators();
+  for(int size = 1; size < 200; size++) {
+    z_1++;
+    FillNoise(size,size,z_1,size);
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = CHSV(50+noise[i][j],255,255);
+      }
+    }
+    ShowFrame();
+    //ClearAll();
+  }  
+  for(int size = 200; size > 1; size--) {
+    z_1++;
+    FillNoise(size,size,z_1,size);
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = CHSV(50+noise[i][j],255,255);
+      }
+    }
+    ShowFrame();
+    //ClearAll();
+  }  
+  }
+}
+
+void ChangePalettePeriodically()
+{
+  uint8_t secondHand = (millis() / 1000) % 60;
+  static uint8_t lastSecond = 99;
+
+  if( lastSecond != secondHand) {
+    lastSecond = secondHand;
+    if( secondHand ==  0)  { 
+      currentPalette = RainbowColors_p;         
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 10)  { 
+      currentPalette = RainbowStripeColors_p;   
+      currentBlending = NOBLEND;  
+    }
+    if( secondHand == 15)  { 
+      currentPalette = RainbowStripeColors_p;   
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 20)  { 
+      SetupPurpleAndGreenPalette();             
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 25)  { 
+      SetupTotallyRandomPalette();              
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 30)  { 
+      SetupBlackAndWhiteStripedPalette();       
+      currentBlending = NOBLEND; 
+    }
+    if( secondHand == 35)  { 
+      SetupBlackAndWhiteStripedPalette();       
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 40)  { 
+      currentPalette = CloudColors_p;           
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 45)  { 
+      currentPalette = PartyColors_p;           
+      currentBlending = LINEARBLEND; 
+    }
+    if( secondHand == 50)  { 
+      currentPalette = myRedWhiteBluePalette_p; 
+      currentBlending = NOBLEND;  
+    }
+    if( secondHand == 55)  { 
+      currentPalette = myRedWhiteBluePalette_p; 
+      currentBlending = LINEARBLEND; 
+    }
+  }
+}
+
+void SetupTotallyRandomPalette()
+{
+  for( int i = 0; i < 16; i++) {
+    currentPalette[i] = CHSV( random8(), 255, random8());
+  }
+}
+
+// This function sets up a palette of black and white stripes,
+// using code.  Since the palette is effectively an array of
+// sixteen CRGB colors, the various fill_* functions can be used
+// to set them up.
+void SetupBlackAndWhiteStripedPalette()
+{
+  // 'black out' all 16 palette entries...
+  fill_solid( currentPalette, 16, CRGB::Black);
+  // and set every fourth one to white.
+  currentPalette[0] = CRGB::White;
+  currentPalette[4] = CRGB::White;
+  currentPalette[8] = CRGB::White;
+  currentPalette[12] = CRGB::White;
+
+}
+
+// This function sets up a palette of purple and green stripes.
+void SetupPurpleAndGreenPalette()
+{
+  CRGB purple = CHSV( HUE_PURPLE, 255, 255);
+  CRGB green  = CHSV( HUE_GREEN, 255, 255);
+  CRGB black  = CRGB::Black;
+
+  currentPalette = CRGBPalette16( 
+  green,  green,  black,  black,
+  purple, purple, black,  black,
+  green,  green,  black,  black,
+  purple, purple, black,  black );
+}
+
+
+// This example shows how to set up a static color palette
+// which is stored in PROGMEM (flash), which is almost always more 
+// plentiful than RAM.  A static PROGMEM palette like this
+// takes up 64 bytes of flash.
+const TProgmemPalette16 myRedWhiteBluePalette_p PROGMEM =
+{
+  CRGB::Red,
+  CRGB::Gray, // 'white' is too bright compared to red and blue
+  CRGB::Blue,
+  CRGB::Black,
+
+  CRGB::Red,
+  CRGB::Gray,
+  CRGB::Blue,
+  CRGB::Black,
+
+  CRGB::Red,
+  CRGB::Red,
+  CRGB::Gray,
+  CRGB::Gray,
+  CRGB::Blue,
+  CRGB::Blue,
+  CRGB::Black,
+  CRGB::Black
+};
+void NoiseExample7() { 
+  ChangePalettePeriodically();
+  for(int size = 1; size < 100; size++) {
+    z_1++;
+    FillNoise(size*3,size*3,z_1,size);
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = ColorFromPalette( currentPalette, noise[i][j], 255, currentBlending);
+      }
+    }
+    ShowFrame();
+  }  
+    for(int size = 100; size > 1; size--) {
+    z_1++;
+    FillNoise(size*3,size*3,z_1,size);
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = ColorFromPalette( currentPalette, noise[i][j], 255, currentBlending);
+      }
+    }
+    ShowFrame();
+  }  
+}
+
+void NoiseExample8() { 
+  ChangePalettePeriodically();
+    x_1++;
+    z_1++;
+    FillNoise(x_1*3,x_1*3,z_1,sin8(x_1)>>1);
+    for(int i = 0; i < kMatrixWidth; i++) {
+      for(int j = 0; j < kMatrixHeight; j++) {
+        leds[XY(i,j)] = ColorFromPalette( currentPalette, noise[i][j], 255, currentBlending);
+      }
+    }
+    ShowFrame();
+} 
+
+
+//-------------------------------------
+void MetaBalls() {
+
+      currentMillis = millis();
+/*  Serial.print("MetaBalls currentMillis: ");
+  Serial.println(currentMillis);
+  Serial.print("MetaBalls prevMillis: ");
+  Serial.println(prevMillis);*/
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+
+  float speed = 1;
+
+  // get some 2 random moving points
+  uint8_t x2 = inoise8(millis() * speed, 25355, 685 ) / 16;
+  uint8_t y2 = inoise8(millis() * speed, 355, 11685 ) / 16;
+
+  uint8_t x3 = inoise8(millis() * speed, 55355, 6685 ) / 16;
+  uint8_t y3 = inoise8(millis() * speed, 25355, 22685 ) / 16;
+
+  // and one Lissajou function
+  uint8_t x1 = beatsin8(23 * speed, 0, 15);
+  uint8_t y1 = beatsin8(28 * speed, 0, 15);
+
+  for (uint8_t y = 0; y < HEIGHT; y++) {
+    for (uint8_t x = 0; x < WIDTH; x++) {
+
+      // calculate distances of the 3 points from actual pixel
+      // and add them together with weightening
+      uint8_t  dx =  abs(x - x1);
+      uint8_t  dy =  abs(y - y1);
+      uint8_t dist = 2 * sqrt((dx * dx) + (dy * dy));
+
+      dx =  abs(x - x2);
+      dy =  abs(y - y2);
+      dist += sqrt((dx * dx) + (dy * dy));
+
+      dx =  abs(x - x3);
+      dy =  abs(y - y3);
+      dist += sqrt((dx * dx) + (dy * dy));
+
+      // inverse result
+      byte color = 1000 / dist;
+
+      // map color between thresholds
+      if (color > 0 and color < 60) {
+        leds[XY(x, y)] = CHSV(color * 9, 255, 255);
+      } else {
+        leds[XY(x, y)] = CHSV(0, 255, 255);
+      }
+        // show the 3 points, too
+        leds[XY(x1,y1)] = CRGB(255, 255,255);
+        leds[XY(x2,y2)] = CRGB(255, 255,255);
+        leds[XY(x3,y3)] = CRGB(255, 255,255);
+    }
+}
+  FastLED.show();
+  //CLS();
+  }
+}
+
+void CLS() {
+  for (uint16_t i = 0; i < NUM_LEDS; i++) {
+    leds[i] = 0x000000;
+  }
+}
+//-------------------------------------
+
+
+
 /*------------------------------------*/
 
 // ***************************************
@@ -789,25 +2240,24 @@ void setAll(byte red, byte green, byte blue) {
 
 /*--------WIFI-and-MQTT----------------------*/
 
-void setup_wifi_fallback_ap() {
+void setup_wifi_fallback_ap() {  //starts an accesspoint
   delay(10);
-  // We start by creating a soft Accesspoint
+  // creating my own accesspoint
   Serial.println();
-  Serial.print("Creating AP ");
-  Serial.println(ap_ssid);
+  Serial.print("creating AP ");
+  Serial.println(AP_SSID);
 
+//  WiFi.softAPConfig(local_ip, gateway, subnet)
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(ap_ssid, ap_pw);
+  WiFi.softAP(AP_SSID, AP_PW);
 
-  mqtt_enabled = 0;  //for disabling mqtt support because no station accesspoint found
+  mqtt_enabled = 0;  //disable mqtt support because no external accesspoint and infrastucture found
   Serial.println("");
   Serial.println("WiFi AP created, mqtt disabled");
   Serial.println("IP address: ");
   Serial.println(WiFi.softAPIP());
-  myIp = WiFi.softAPIP().toString();
+  myIp = WiFi.softAPIP().toString();  //getting IP for webserver
 }
-
-
 
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -825,7 +2275,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   int intPrg = s.toInt();
 
   if(str_topic==mqtt_intopic_ledprg){
-      if(intPrg<20){  //maximum amount of available programs
+      if(intPrg<=MAXIMUMEFFECTS){        //maximum amount of available programs/effects
           selectedEffect = intPrg;
         }
     } 
@@ -836,21 +2286,26 @@ void callback(char* topic, byte* payload, unsigned int length) {
       }
     }
 
+   if(str_topic==mqtt_intopic_ledbright){
+    if(intPrg>=0 && intPrg<255){
+      brightness=intPrg;
+      }
+    }
+
   if(str_topic==mqtt_intopic_ledred){
-    if(intPrg>0 && intPrg<255){
+    if(intPrg>=0 && intPrg<255){
       red=intPrg;
-//      handlePowerLimit;
       }
     }
 
   if(str_topic==mqtt_intopic_ledgreen){
-    if(intPrg>0 && intPrg<255){
+    if(intPrg>=0 && intPrg<255){
       green=intPrg;
       }
     }    
 
   if(str_topic==mqtt_intopic_ledblue){
-    if(intPrg>0 && intPrg<255){
+    if(intPrg>=0 && intPrg<255){
       blue=intPrg;
       }
     }
@@ -886,31 +2341,30 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }        
     
   if(str_topic==mqtt_intopic_ledspeed){
-    if(intPrg>0 && intPrg<255){
+    if(intPrg>1 && intPrg<255){
       Speed=intPrg;
       }
     }
 
 }
 
-boolean reconnect() {
+boolean reconnect() {               //reconnect to mqtt-server
   int mqttconncounter=0;
-  // Loop until we're reconnected
-  while (!client.connected() && mqttconncounter < 5) {
+  while (!client.connected() && mqttconncounter < MAXMQTTCONRETRY+1) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
     if (client.connect("FireTorchESP", mqtt_username, mqtt_password)) {
-      Serial.println("connected");
+      Serial.println("mqtt server connected");
       client.subscribe(mqtt_intopic_ledtorch);
       mqttconncounter=0;
     } else {
       mqttconncounter++;
-      Serial.print("failed, rc=");
+      Serial.print("failed to connect to mqtt-server, rc=");
       Serial.print(client.state());
       Serial.println(" try again in 3 seconds, mqttconncounter=");
       Serial.println(mqttconncounter);
-      if (mqttconncounter > 4)
-      {mqtt_enabled=0;}  //for disabling mqtt support
+      if (mqttconncounter > MAXMQTTCONRETRY)
+      {mqtt_enabled=0;}
       // Wait 3 seconds before retrying
       delay(3000);
     }
@@ -929,10 +2383,10 @@ boolean checkForMessages(){
     selectedEffect_old = selectedEffect;
     dtostrf(selectedEffect, 2, 0, StrselectedEffect);
     client.publish(mqtt_outtopic_ledprg, StrselectedEffect); 
-        
+    setEffectParameters(); 
        return true;
     } else {
-        //Serial.println("selectedEffect gleich");
+        //Serial.println("selectedEffect unchanged");
        return false;
     }
   }
