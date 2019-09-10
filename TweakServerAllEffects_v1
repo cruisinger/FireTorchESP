@@ -431,7 +431,7 @@ void setEffectParameters(){  //you can set individual parameters for every effec
     case 14 : {break;}
     case 15 : {break;}
     case 16 : {break;}
-    case 17 : {break;} 
+    case 17 : {Speed=43;break;} 
     case 18 : {Speed=50;break;} 
     case 19 : {Speed=50;break;}  
     case 20 : {Speed=100;break;}
@@ -804,10 +804,13 @@ void Twinkle(){
 /*-----firetorch-------------------------------*/
 
 void firetorch(){
-
+  currentMillis = millis();
+  if(currentMillis - prevMillis > Speed) {
+    prevMillis = currentMillis;
+    
      // generate palette 
-    for (k = 0; k < 128; k++) {
-        hsl_to_rgb(k / 5, 255, k * 2> 128 ? 128: k * 2, &r, &g, &b);
+    for (k = 0; k < 128; k++) {     //k Startwert ist die Höhe der Flamme, Endwert die Höhe des Schwarzen darunter
+        hsl_to_rgb(k / 2, 255, k * 2> 128 ? 128: k * 2, &r, &g, &b);  //der erste Übergabewert ist für gelb unten verantwortlich
         g = g == 1 ? 0 : g;
         b = b == 1 ? 0 : b;
         palette[k*3] = r;
@@ -855,7 +858,7 @@ void firetorch(){
             }
         }
         showStrip(); // write to screenbuffer
-        delay(50);   // limits framerate
+  }
 }
 
 
