@@ -26,6 +26,7 @@
 uint8_t fire[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t sparks[screenHeight + extraLines][screenWidth];  //only for firetorch()
 uint8_t x, y;  //only for firetorch()
+uint8_t fc1=2, fc2=255, fc3=128, fc4=2;  //firecolor only for firetorch()
 uint8_t r=0.0, g=0.0, b=0.0;
 uint16_t i=0,j=0,k=0;
 uint8_t palette[384];  //only for firetorch()
@@ -152,6 +153,7 @@ void handleRoot() {
   digitalWrite(led, 0);
   message="<html><head><style>input[type='number'] {width:75px;}</style></head><body style='font-family: sans-serif; font-size: 16px'>    The Following functions are available:<br><br><a href='http://" + myIp + "/ledoff' class='button'>Turn off leds</a><br><br>";
   message+="<form action='http://" + myIp + "/powerlimit'> Power limit: <input type='number' name='powerlimit' min='100' max='10000' value='1000'></form>";
+  message+="<form action='http://" + myIp + "/brightness'> Brightness: <input type='number' name='brightness' min='1' max='255' value='63'></form>";
   message+="<form action='http://" + myIp + "/colorwipe'><input type='submit' value='ColorWipe'> Red <input type='number' name='red' min='0' max='255' value='120'> Green <input type='number' name='green' min='0' max='255' value='0'> Blue <input type='number' name='blue' min='0' max='255' value='0'> Speed <input type='number' name='speed' min='1' max='5000' value='100'></form>";
   message+="<form action='http://" + myIp + "/cyclonbounce'><input type='submit' value='CyclonBounce'> Red <input type='number' name='red' min='0' max='255' value='0'> Green <input type='number' name='green' min='0' max='255' value='127'> Blue <input type='number' name='blue' min='0' max='255' value='0'> Speed <input type='number' name='speed' min='1' max='5000' value='100'> EyeWidth <input type='number' name='eyewidth' min='1' max='500' value='2'></form>";
   message+="<form action='http://" + myIp + "/fadeinout'><input type='submit' value='FadeInOut'> Red <input type='number' name='red' min='0' max='255' value='0'> Green <input type='number' name='green' min='0' max='255' value='0'> Blue <input type='number' name='blue' min='0' max='255' value='127'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
@@ -168,7 +170,7 @@ void handleRoot() {
   message+="<form action='http://" + myIp + "/theatrechaserainbow'><input type='submit' value='TheatreChaseRainbow'> Speed <input type='number' name='speed' min='1' max='5000' value='75'></form>";
   message+="<form action='http://" + myIp + "/twinklerandom'><input type='submit' value='TwinkleRandom'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
   message+="<form action='http://" + myIp + "/twinkle'><input type='submit' value='Twinkle'> Red <input type='number' name='red' min='0' max='255' value='20'> Green <input type='number' name='green' min='0' max='255' value='40'> Blue <input type='number' name='blue' min='0' max='255' value='10'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
-  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetorch'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>";
+  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetorch'> Speed <input type='number' name='speed' min='1' max='500' value='42'> Firecolor1 <input type='number' name='fc1' min='1' max='10' value='2'> Firecolor2 <input type='number' name='fc2' min='1' max='255' value='255'> Firecolor3 <input type='number' name='fc3' min='1' max='255' value='128'> Firecolor4 <input type='number' name='fc4' min='1' max='50' value='2'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>";
   message+="<form action='http://" + myIp + "/Dots1'><input type='submit' value='Dots1'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
   message+="<form action='http://" + myIp + "/Dots2'><input type='submit' value='Dots2'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
   message+="<form action='http://" + myIp + "/SlowMandala'><input type='submit' value='SlowMandala'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
@@ -205,6 +207,11 @@ void handleArgs(){
   if (server.hasArg("delay")){String dlay = server.arg("delay");Delay = dlay.toInt();}
   if (server.hasArg("pause")){String paus = server.arg("pause");Pause = paus.toInt();}
   if (server.hasArg("powerlimit")){String pwlim = server.arg("powerlimit");PowerLimit = pwlim.toInt();}
+  if (server.hasArg("brightness")){String brgtnss = server.arg("brightness");brightness = brgtnss.toInt();}
+  if (server.hasArg("fc1")){String fc1s = server.arg("fc1");fc1 = fc1s.toInt();}
+  if (server.hasArg("fc2")){String fc2s = server.arg("fc2");fc2 = fc2s.toInt();}
+  if (server.hasArg("fc3")){String fc3s = server.arg("fc3");fc3 = fc3s.toInt();}
+  if (server.hasArg("fc4")){String fc4s = server.arg("fc4");fc4 = fc4s.toInt();}
 }
 
 void handleColorWipe(){resetArgs();handleArgs();selectedEffect=1;handleRoot();}
@@ -235,6 +242,7 @@ void handleNoiseExample2(){resetArgs();handleArgs();selectedEffect=25;handleRoot
 void handleNoiseExample3(){resetArgs();handleArgs();selectedEffect=26;handleRoot();}
 void handleNoiseExample4(){resetArgs();handleArgs();selectedEffect=27;handleRoot();}
 void handlePowerLimit(){resetArgs();handleArgs();handleRoot();}
+void handleBrightness(){resetArgs();handleArgs();handleRoot();}
 
 void handleNotFound() {
   digitalWrite(led, 0);
@@ -268,7 +276,7 @@ void setup(void) {
   WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(120); //timeout before falling back to softAP
 
-  if(!wifiManager.autoConnect(AP_SSID, AP_PW)) {
+  if(!wifiManager.autoConnect("LED-config",AP_PW)) {
     Serial.println("failed to connect to external accesspoint and hit timeout, enabling my own accesspoint");
     delay(3000);
     setup_wifi_fallback_ap();  // activate fallback soft Accesspoint
@@ -300,10 +308,10 @@ void setup(void) {
   y2 = random16();
   z2 = random16();
 
-
   server.on("/", handleRoot);
   server.on("/ledoff", [](){selectedEffect=0;handleRoot();});
-  server.on("/powerlimit", handlePowerLimit);  
+  server.on("/powerlimit", handlePowerLimit);
+  server.on("/brightness", handleBrightness);    
   server.on("/colorwipe", handleColorWipe);
   server.on("/cyclonbounce", handleCyclonBounce);
   server.on("/fadeinout", handleFadeInOut);
@@ -353,7 +361,7 @@ void loop(void) {
       Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
       WiFiManager wifiManager;
       wifiManager.resetSettings();
-      
+
     if (!wifiManager.startConfigPortal(AP_SSID, AP_PW)) {
       Serial.println("failed to connect and hit timeout");
       delay(3000);
@@ -809,10 +817,10 @@ void firetorch(){
   currentMillis = millis();
   if(currentMillis - prevMillis > Speed) {
     prevMillis = currentMillis;
-    
+
      // generate palette 
-    for (k = 0; k < 128; k++) {     //k Startwert ist die Höhe der Flamme, Endwert die Höhe des Schwarzen darunter
-        hsl_to_rgb(k / 2, 255, k * 2> 128 ? 128: k * 2, &r, &g, &b);  //der erste Übergabewert ist für gelb unten verantwortlich
+    for (k = 0; k < 128; k++) {         //k Startwert ist die Höhe der Flamme, Endwert die Höhe des Schwarzen darunter
+        hsl_to_rgb(k / fc1, fc2, k * fc4> fc3 ? fc3: k * fc4, &r, &g, &b);  //der erste Übergabewert ist für gelb unten verantwortlich
         g = g == 1 ? 0 : g;
         b = b == 1 ? 0 : b;
         palette[k*3] = r;
