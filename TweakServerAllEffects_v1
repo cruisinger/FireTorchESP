@@ -1,5 +1,7 @@
+#define FASTLED_ESP8266_DMA
 #define FASTLED_INTERRUPT_RETRY_COUNT 0
 #define FASTLED_ALLOW_INTERRUPTS 0
+#define FASTLED_INTERNAL
 #include "FastLED.h"
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
@@ -16,8 +18,8 @@
 #define LED_PIN     3 //LED-strip signal GPIO-PIN
 #define COLOR_ORDER GRB
 #define BIT_S(var,b) ((var&(1<<b))?1:0)  //only for firetorch()
-#define EFFECTBUTTON 14  // GPIO-PIN for changing programs
-#define WLANBUTTON 5  // GPIO-PIN for calling wifimanager
+#define EFFECTBUTTON 14  // GPIO-PIN for changing programs 14 = D5
+#define WLANBUTTON 5  // GPIO-PIN for calling wifimanager 5 = D1
 #define AP_SSID "LED-Fackel"  // initial accesspoint ssid
 #define AP_PW "password"   // password for initial accesspoint
 #define MAXMQTTCONRETRY 5  //maximum attempts to connect to mqtt server if connection is lost
@@ -50,6 +52,7 @@ const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
 byte lastReconnectAttempt = 0; //for mqtt reconnect
 boolean mqtt_enabled = 1;  // set to 0 if mqtt not needed
+boolean EffectButtonPressed = 0;
 
 CRGB leds[NUM_LEDS];
 WiFiClient espClient;
@@ -85,7 +88,7 @@ int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
 int snowDelay = random(100,1000);
 String message;
 String myIp;
-byte selectedEffect = 18;  //defines start-program/effect
+byte selectedEffect = 17;  //defines start-program/effect
 byte selectedEffect_old=0;  // helper variable for effect
 unsigned int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
 unsigned int brightness = 63;   // set startup brightness 0-255 for light intensity
@@ -170,7 +173,7 @@ void handleRoot() {
   message+="<form action='http://" + myIp + "/theatrechaserainbow'><input type='submit' value='TheatreChaseRainbow'> Speed <input type='number' name='speed' min='1' max='5000' value='75'></form>";
   message+="<form action='http://" + myIp + "/twinklerandom'><input type='submit' value='TwinkleRandom'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
   message+="<form action='http://" + myIp + "/twinkle'><input type='submit' value='Twinkle'> Red <input type='number' name='red' min='0' max='255' value='20'> Green <input type='number' name='green' min='0' max='255' value='40'> Blue <input type='number' name='blue' min='0' max='255' value='10'> Flashes <input type='number' name='flashes' min='1' max='100' value='10'> Speed <input type='number' name='speed' min='1' max='1000' value='250'> Fade <input type='checkbox' name='fade' value='true' checked='true'></form>";
-  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetorch'> Speed <input type='number' name='speed' min='1' max='500' value='42'> Firecolor1 <input type='number' name='fc1' min='1' max='10' value='2'> Firecolor2 <input type='number' name='fc2' min='1' max='255' value='255'> Firecolor3 <input type='number' name='fc3' min='1' max='255' value='128'> Firecolor4 <input type='number' name='fc4' min='1' max='50' value='2'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>";
+  message+="<form action='http://" + myIp + "/firetorch'><input type='submit' value='Firetorch'> Speed <input type='number' name='speed' min='1' max='500' value='50'> Firecolor1 <input type='number' name='fc1' min='1' max='10' value='2'> Firecolor2 <input type='number' name='fc2' min='1' max='255' value='255'> Firecolor3 <input type='number' name='fc3' min='1' max='255' value='128'> Firecolor4 <input type='number' name='fc4' min='1' max='50' value='2'> Power limit <input type='number' name='powerlimit' min='200' max='10000' value='1000'></form>";
   message+="<form action='http://" + myIp + "/Dots1'><input type='submit' value='Dots1'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
   message+="<form action='http://" + myIp + "/Dots2'><input type='submit' value='Dots2'> Speed <input type='number' name='speed' min='1' max='5000' value='30'></form>";
   message+="<form action='http://" + myIp + "/SlowMandala'><input type='submit' value='SlowMandala'> Speed <input type='number' name='speed' min='1' max='5000' value='10'></form>";
@@ -187,13 +190,6 @@ void handleRoot() {
 }
 
 void handleArgs(){
-//  message = "Arguments: ";
-//  message += server.args();
-//  message += "\n";
-//  for (uint8_t i = 0; i < server.args(); i++) {
-//    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-//  }
-//  Serial.println(message);
   if (server.hasArg("red")){String colr = server.arg("red");red = colr.toInt();}
   if (server.hasArg("green")){String colg = server.arg("green");green = colg.toInt();}
   if (server.hasArg("blue")){String colb = server.arg("blue");blue = colb.toInt();}
@@ -217,7 +213,7 @@ void handleArgs(){
 void handleColorWipe(){resetArgs();handleArgs();selectedEffect=1;handleRoot();}
 void handleCyclonBounce(){resetArgs();handleArgs();selectedEffect=2;handleRoot();}
 void handleFadeInOut(){resetArgs();handleArgs();selectedEffect=3;handleRoot();}
-void handleHalloweenEyes(){resetArgs();handleArgs();setAll(0,0,0);selectedEffect=4;handleRoot();}
+void handleHalloweenEyes(){resetArgs();handleArgs();setAll(0,0,0);showStrip();selectedEffect=4;handleRoot();}
 void handlemeteorrain(){resetArgs();handleArgs();selectedEffect=5;handleRoot();}
 void handleNewKITT(){resetArgs();handleArgs();selectedEffect=6;handleRoot();}
 void handleRainbowCycle(){resetArgs();handleArgs();selectedEffect=7;handleRoot();}
@@ -241,8 +237,8 @@ void handleNoiseExample1(){resetArgs();handleArgs();selectedEffect=24;handleRoot
 void handleNoiseExample2(){resetArgs();handleArgs();selectedEffect=25;handleRoot();}
 void handleNoiseExample3(){resetArgs();handleArgs();selectedEffect=26;handleRoot();}
 void handleNoiseExample4(){resetArgs();handleArgs();selectedEffect=27;handleRoot();}
-void handlePowerLimit(){resetArgs();handleArgs();handleRoot();}
-void handleBrightness(){resetArgs();handleArgs();handleRoot();}
+void handlePowerLimit(){handleArgs();handleRoot();}
+void handleBrightness(){handleArgs();handleRoot();}
 
 void handleNotFound() {
   digitalWrite(led, 0);
@@ -265,26 +261,37 @@ void setup(void) {
   pinMode(led, OUTPUT);
   digitalWrite(led, 1);
   Serial.begin(115200);
-
+  
   pinMode(EFFECTBUTTON, INPUT_PULLUP);
   digitalWrite (EFFECTBUTTON, HIGH);  // internal pull-up resistor
-  attachInterrupt (digitalPinToInterrupt (EFFECTBUTTON), changeEffect, CHANGE); // pressed
+  attachInterrupt (digitalPinToInterrupt (EFFECTBUTTON), changeEffect, FALLING); // pressed
 
   pinMode(WLANBUTTON, INPUT_PULLUP);
   digitalWrite (WLANBUTTON, HIGH);
 
   WiFiManager wifiManager;
+  
+  WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);   //extend config portal with mqtt query
+  wifiManager.addParameter(&custom_mqtt_server);            
+  
   wifiManager.setConfigPortalTimeout(120); //timeout before falling back to softAP
 
   if(!wifiManager.autoConnect("LED-config",AP_PW)) {
-    Serial.println("failed to connect to external accesspoint and hit timeout, enabling my own accesspoint");
+    Serial.println("failed to connect to previous known external accesspoint by hitting timeout, enabling my own accesspoint");
     delay(3000);
     setup_wifi_fallback_ap();  // activate fallback soft Accesspoint
     } 
   else{
     myIp = WiFi.localIP().toString();  //getting IP if connected to external accesspoint
+    mqtt_server = custom_mqtt_server.getValue();
     }
-  
+
+  if (strlen(mqtt_server)<9){
+    Serial.println("mqtt server Wert ist leer ");  //mqtt server ip is too short
+    mqtt_enabled=0;
+    mqtt_server = "";
+  }
+    
   if (mqtt_server && mqtt_enabled==1){  //if mqtt-server is given and mqtt expicit enabled, than activating mqtt
     Serial.print("mqtt server: ");
     Serial.println(mqtt_server);
@@ -352,27 +359,14 @@ void loop(void) {
   checkForMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
   FastLED.setBrightness(brightness);
-
-  if ( digitalRead(EFFECTBUTTON) == LOW ) {
-    changeEffect;
-  }
   
-  if ( digitalRead(WLANBUTTON) == LOW ) {
+  if (digitalRead(WLANBUTTON) == LOW) {
       Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
       WiFiManager wifiManager;
       wifiManager.resetSettings();
-
-    if (!wifiManager.startConfigPortal(AP_SSID, AP_PW)) {
-      Serial.println("failed to connect and hit timeout");
-      delay(3000);
-      //reset and try again, or maybe put it to deep sleep
-      ESP.reset();
-      delay(5000);
-      }
-    //if you get here you have connected to the WiFi
-    Serial.println("connected...yeey :)");
+      ESP.restart();   // restart ESP8266, to get into config-mode
   }
-  
+
     if (!client.connected() && mqtt_enabled==1) {  //if disconnected from mqtt-server AND mqtt-support is enabled
     long now = millis();
     if (now - lastReconnectAttempt > 5000) {
@@ -386,9 +380,14 @@ void loop(void) {
     // Client connected
     client.loop();
   }
-  
+
+  if (EffectButtonPressed==1){      
+    setEffectParameters();
+  EffectButtonPressed=0;
+}
+
   switch(selectedEffect) {
-    case 0  : {setAll(0,0,0);return;}
+    case 0  : {SwitchLightsOff();break;}
     case 1  : {colorWipe();break;}
     case 2  : {CyclonBounce();break;}
     case 3  : {FadeInOut();break;}
@@ -417,41 +416,41 @@ void loop(void) {
     case 26 : {NoiseExample3();break;}
     case 27 : {NoiseExample4();break;}
     case 28 : {MetaBalls();break;}
-    case 29 : {setAll(red,green,blue);break;}
+    case 29 : {OnlyLightUp();break;}
     case 30 : {NoiseExample5();break;}
     case 31 : {NoiseExample6();break;}
   }
 }
 
-void setEffectParameters(){  //you can set individual parameters for every effect/lightprogram; this function should be called once at start of a program
+void setEffectParameters(){//you can set individual parameters for every effect/lightprogram; this function should be called once at start of a program only if Button was pressed
   switch(selectedEffect) {
-    case 1  : {break;}
-    case 2  : {break;}
-    case 3  : {break;}
-    case 4  : {break;}
-    case 5  : {break;}
-    case 6  : {break;}
-    case 7  : {break;}
-    case 8  : {break;}
-    case 9  : {break;}
-    case 10 : {break;}
-    case 11 : {break;}
-    case 12 : {break;}
-    case 13 : {break;}
-    case 14 : {break;}
-    case 15 : {break;}
-    case 16 : {break;}
-    case 17 : {Speed=43;break;} 
-    case 18 : {Speed=50;break;} 
-    case 19 : {Speed=50;break;}  
-    case 20 : {Speed=100;break;}
-    case 21 : {Speed=100;break;}
-    case 22 : {Speed=100;break;}
-    case 23 : {Speed=100;break;}
-    case 24 : {break;}
-    case 25 : {break;}
-    case 26 : {break;}
-    case 27 : {break;}
+    case 1  : {handleColorWipe();red=128;green=0;blue=0;Speed=100;break;}
+    case 2  : {handleCyclonBounce();red=0;green=127;blue=0;Speed=100;EyeWidth=2;break;}
+    case 3  : {handleFadeInOut();red=0;green=0;blue=127;Speed=10;break;}
+    case 4  : {handleHalloweenEyes();red=128;green=128;blue=128;Speed=100;EyeWidth=1;EyeSpace=4;Fade=true;break;}
+    case 5  : {handlemeteorrain();red=20;green=40;blue=10;Speed=200;EyeWidth=2;Fade=true;fadeSpeed=150;break;}
+    case 6  : {handleNewKITT();red=200;green=0;blue=0;Speed=50;EyeWidth=2;break;}
+    case 7  : {handleRainbowCycle();Speed=20;break;}
+    case 8  : {handleRGBLoop();Speed=10;break;}
+    case 9  : {handleRunningLights();red=20;green=40;blue=10;Speed=150;break;}
+    case 10 : {handleSnowSparkle();red=20;green=40;blue=10;Speed=100;break;}
+    case 11 : {handleSparkle();red=20;green=40;blue=10;Speed=100;break;}
+    case 12 : {handleStrobe();red=120;green=0;blue=0;Speed=10;Flashes=10;Delay=50;Pause=1000;break;}
+    case 13 : {handleTheaterChase();red=20;green=40;blue=10;Speed=100;break;}
+    case 14 : {handleTheaterChaseRainbow();Speed=75;break;}
+    case 15 : {handleTwinkleRandom();Speed=250;Flashes=10;Fade=true;break;}
+    case 16 : {handleTwinkle();red=20;green=40;blue=10;Speed=250;Flashes=10;Fade=true;break;}
+    case 17 : {handleFiretorch();Speed=50;break;} 
+    case 18 : {handleDots1();Speed=50;break;} 
+    case 19 : {handleDots2();Speed=50;break;}  
+    case 20 : {handleSlowMandala();Speed=10;break;}
+    case 21 : {handleSlowMandala2();Speed=10;break;}
+    case 22 : {handleSlowMandala3();Speed=10;break;}
+    case 23 : {handleMandala8();Speed=10;break;}
+    case 24 : {handleNoiseExample1();Speed=10;break;}
+    case 25 : {handleNoiseExample2();Speed=10;break;}
+    case 26 : {handleNoiseExample3();Speed=10;break;}
+    case 27 : {handleNoiseExample4();Speed=10;break;}
     case 28 : {break;}
     case 29 : {red=128;green=128;blue=128;break;}
     case 30 : {break;}
@@ -466,13 +465,18 @@ void changeEffect() {
     {
     selectedEffect++;    
     }
-      Serial.println("Effect Program No.: ");
-      Serial.print(selectedEffect);
-      Serial.println(" ");
-    setEffectParameters();
+    EffectButtonPressed = 1;
 }
 
+void SwitchLightsOff(){
+  setAll(0,0,0);
+  showStrip();
+}
 
+void OnlyLightUp(){
+  setAll(red,green,blue);
+  showStrip();
+}
 
 void colorWipe(){
   currentMillis = millis();
@@ -732,9 +736,9 @@ void RGBLoop(){
     if (j>2){j=0;}
     if (dir==0){k++;}else{k--;}
     switch(j) {
-      case 0: setAll(k,0,0); break;
-      case 1: setAll(0,k,0); break;
-      case 2: setAll(0,0,k); break;
+      case 0: setAll(k,0,0); showStrip(); break;
+      case 1: setAll(0,k,0); showStrip(); break;
+      case 2: setAll(0,0,k); showStrip(); break;
     }
   }
 }
@@ -773,8 +777,8 @@ void Sparkle(){
 
 void Strobe(){
   currentMillis = millis();
-  if (i==Flashes && state==0){if(currentMillis - prevMillis > Pause) {i=0;}else{setAll(0,0,0);return;}}
-  if(currentMillis - prevMillis > Delay) {prevMillis = currentMillis;if (state==0){setAll(red,green,blue);state=1;i++;}else{setAll(0,0,0);state=0;}}
+  if (i==Flashes && state==0){if(currentMillis - prevMillis > Pause) {i=0;}else{setAll(0,0,0);showStrip();return;}}
+  if(currentMillis - prevMillis > Delay) {prevMillis = currentMillis;if (state==0){setAll(red,green,blue);showStrip();state=1;i++;}else{setAll(0,0,0);showStrip();state=0;}}
 }
 
 void theaterChase(){
@@ -821,6 +825,7 @@ void firetorch(){
      // generate palette 
     for (k = 0; k < 128; k++) {         //k Startwert ist die Höhe der Flamme, Endwert die Höhe des Schwarzen darunter
         hsl_to_rgb(k / fc1, fc2, k * fc4> fc3 ? fc3: k * fc4, &r, &g, &b);  //der erste Übergabewert ist für gelb unten verantwortlich
+        //hsl_to_rgb(k / 5, 255, k * 2> 128 ? 128: k * 2, &r, &g, &b);
         g = g == 1 ? 0 : g;
         b = b == 1 ? 0 : b;
         palette[k*3] = r;
@@ -1393,10 +1398,10 @@ void Dots2() {
 
 void SlowMandala() {
   currentMillis = millis();
-  Serial.print("SlowMandala currentMillis: ");
+/*  Serial.print("SlowMandala currentMillis: ");
   Serial.println(currentMillis);
   Serial.print("SlowMandala prevMillis: ");
-  Serial.println(prevMillis);
+  Serial.println(prevMillis);*/
   if(currentMillis - prevMillis > Speed) {
     prevMillis = currentMillis;     
     if (i>=16){i=0;}else{i++;}  
@@ -1406,6 +1411,7 @@ void SlowMandala() {
         Caleidoscope1();
         ShowFrame();
         FastLED.delay(50);
+        setAll(0,0,0);
       }
   }
 }
@@ -1926,10 +1932,10 @@ void ReadAudio2() {
 
 void NoiseExample5() { 
         currentMillis = millis();
-  Serial.print("NoiseExample5 currentMillis: ");
+/*  Serial.print("NoiseExample5 currentMillis: ");
   Serial.println(currentMillis);
   Serial.print("NoiseExample5 prevMillis: ");
-  Serial.println(prevMillis);
+  Serial.println(prevMillis);*/
   if(currentMillis - prevMillis > Speed) {
     prevMillis = currentMillis;
   MoveOscillators();
@@ -2197,7 +2203,7 @@ void MetaBalls() {
         leds[XY(x3,y3)] = CRGB(255, 255,255);
     }
 }
-  FastLED.show();
+  showStrip();
   //CLS();
   }
 }
@@ -2248,7 +2254,7 @@ void setAll(byte red, byte green, byte blue) {
   for(int i = 0; i < NUM_LEDS; i++ ) {
     setPixel(i, red, green, blue);
   }
-  showStrip();
+  //showStrip();
 }
 
 /*--------WIFI-and-MQTT----------------------*/
