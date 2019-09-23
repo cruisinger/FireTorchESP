@@ -52,7 +52,7 @@ const char* mqtt_intopic_ledtorch = "cmnd/ledtorch/+";
 char StrselectedEffect[2];
 byte lastReconnectAttempt = 0; //for mqtt reconnect
 boolean mqtt_enabled = 1;  // set to 0 if mqtt not needed
-boolean EffectButtonPressed = 0;
+volatile boolean EffectButtonPressed = 0;
 
 CRGB leds[NUM_LEDS];
 WiFiClient espClient;
@@ -71,6 +71,7 @@ int EyeWidth = 2;
 int EyeSpace = 4;
 unsigned long currentMillis;
 unsigned long prevMillis = 0;
+volatile unsigned long alteZeit=0, entprellZeit=200;
 long delayMillis = 0;
 long snowMillis = 0;
 bool Fade = true;
@@ -88,7 +89,7 @@ int Start2ndEye = StartPoint + EyeWidth + EyeSpace;
 int snowDelay = random(100,1000);
 String message;
 String myIp;
-byte selectedEffect = 17;  //defines start-program/effect
+volatile byte selectedEffect = 17;  //defines start-program/effect
 byte selectedEffect_old=0;  // helper variable for effect
 unsigned int PowerLimit = 1000;   //in mA, for limiting power consumption by using insufficient power supplies, 1000 is save for most USB-Ports
 unsigned int brightness = 63;   // set startup brightness 0-255 for light intensity
@@ -261,7 +262,7 @@ void setup(void) {
   pinMode(led, OUTPUT);
   digitalWrite(led, 1);
   Serial.begin(115200);
-  
+
   pinMode(EFFECTBUTTON, INPUT_PULLUP);
   digitalWrite (EFFECTBUTTON, HIGH);  // internal pull-up resistor
   attachInterrupt (digitalPinToInterrupt (EFFECTBUTTON), changeEffect, FALLING); // pressed
@@ -359,7 +360,13 @@ void loop(void) {
   checkForMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
   FastLED.setBrightness(brightness);
-  
+
+/*  
+  if (digitalRead(EFFECTBUTTON) == LOW) {
+    Serial.println("someone pressed the EFFECT button! ");
+    changeEffect();
+  }*/
+
   if (digitalRead(WLANBUTTON) == LOW) {
       Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
       WiFiManager wifiManager;
@@ -381,10 +388,10 @@ void loop(void) {
     client.loop();
   }
 
-  if (EffectButtonPressed==1){      
+  if (EffectButtonPressed==1){
     setEffectParameters();
-  EffectButtonPressed=0;
-}
+    EffectButtonPressed=0;
+    }
 
   switch(selectedEffect) {
     case 0  : {SwitchLightsOff();break;}
@@ -457,15 +464,20 @@ void setEffectParameters(){//you can set individual parameters for every effect/
   }
 }
 
+
 void changeEffect() {
+  if((millis() - alteZeit) > entprellZeit) { 
+    // innerhalb der entprellZeit nichts machen
   if (selectedEffect >MAXIMUMEFFECTS){
-    selectedEffect=1;
+      selectedEffect=1;
     }
     else
     {
-    selectedEffect++;    
+      selectedEffect++;    
     }
     EffectButtonPressed = 1;
+    alteZeit = millis(); // letzte Schaltzeit merken      
+  }
 }
 
 void SwitchLightsOff(){
