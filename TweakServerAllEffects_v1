@@ -357,15 +357,9 @@ void setup(void) {
 
 void loop(void) {
   server.handleClient();
-  checkForMessages();
+  checkForMQTTMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
   FastLED.setBrightness(brightness);
-
-/*  
-  if (digitalRead(EFFECTBUTTON) == LOW) {
-    Serial.println("someone pressed the EFFECT button! ");
-    changeEffect();
-  }*/
 
   if (digitalRead(WLANBUTTON) == LOW) {
       Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
@@ -389,6 +383,7 @@ void loop(void) {
   }
 
   if (EffectButtonPressed==1){
+    setAll(0,0,0); showStrip();  //clear display
     setEffectParameters();
     EffectButtonPressed=0;
     }
@@ -465,7 +460,7 @@ void setEffectParameters(){//you can set individual parameters for every effect/
 }
 
 
-void changeEffect() {
+void changeEffect() {  // time critical routine, because called by interrupt, has to be as short as possible, variables has to declared as volatile
   if((millis() - alteZeit) > entprellZeit) { 
     // innerhalb der entprellZeit nichts machen
   if (selectedEffect >MAXIMUMEFFECTS){
@@ -2403,7 +2398,7 @@ boolean reconnect() {               //reconnect to mqtt-server
   return client.connected();
 }
 
-boolean checkForMessages(){
+boolean checkForMQTTMessages(){
   //checks if any mqtt message has arrived
   client.loop();
     if(selectedEffect_old != selectedEffect){ 
@@ -2414,7 +2409,7 @@ boolean checkForMessages(){
     selectedEffect_old = selectedEffect;
     dtostrf(selectedEffect, 2, 0, StrselectedEffect);
     client.publish(mqtt_outtopic_ledprg, StrselectedEffect); 
-    setEffectParameters(); 
+    EffectButtonPressed = 1;
        return true;
     } else {
         //Serial.println("selectedEffect unchanged");
