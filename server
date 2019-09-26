@@ -1,0 +1,376 @@
+/* *******************************************************************
+   Webserver
+
+   How it all works together:
+
+   page   0.htm         includes javascript j.js
+   script j.js          the javascript requests the JSON
+          json          returns data as JSON
+   css    f.css         css for all on flash (program) memory
+   php                  not really php - only a resource doing actions and not returning content (just http header 204 ok)
+   ***************************************************************** */
+
+void handleNotFound() {
+  // Output a "404 not found" page. It includes the parameters which comes handy for test purposes.
+  Serial.println(F("D015 handleNotFound()"));
+  String message;
+  message += F("404 - File Not Found\n\n"
+               "URI: ");
+  message += server.uri();
+  message += F("\nMethod: ");
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += F("\nArguments: ");
+  message += server.args();
+  message += F("\n");
+  for (uint8_t i = 0; i < server.args(); i++)
+  {
+    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+  server.send(404, "text/plain", message);
+}
+
+
+void handlePage()
+{
+  String message;
+  message =  F("<!DOCTYPE html>\n"
+               "<html>\n<head>\n<title> LED-Torch </title>\n"
+               "<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\">\n"
+               "<meta name=\"viewport\" content=\"width=device-width\">\n"
+               "<link rel='stylesheet' type='text/css' href='/f.css'>\n"
+               "<script src='j.js'></script>\n"
+               "</head>\n");
+  message += F("<body onload='selectedEffect'>\n"
+               "<header>\n<h1> LED-Torch Control Interface </h1>\n"
+               "<nav><p><a href=\"0.htm\">[Home]</a> <a href='c.php?lightsoff=1' target='i'>[Lights&nbsp;off]</a> <a href=\"old\">[Old&nbsp;Userinterface]</a> <a href='c.php?erasewlan=1' target='i'>[Ersae&nbsp;WLAN-Credentials]</a> </p></nav>\n</header>\n"
+               "<main>\n");
+/*------------------- *** HOME ***  0.htm -------------------------*/
+  if (server.uri() == "/0.htm" || server.uri() == "/")                                     
+  {
+
+    message += F("<article>\n"
+                 "<h2>Switch</h2>\n"                                                       // example how to switch/toggle an output
+                 "<p>Select Effect:</p>\n"
+                 "<p class='off'><a href='/firetorch' target='i'>Firetorch</a></p>\n"
+                 
+                 "<p class='off'><a href='c.php?effectprg=1' target='i'>ColorWipe</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=2' target='i'>CyclonBounce</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=3' target='i'>FadeInOut</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=4' target='i'>HalloweenEyes</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=5' target='i'>MeteorRain</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=6' target='i'>NewKITT</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=7' target='i'>RainbowCycle</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=8' target='i'>RGBLooP</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=9' target='i'>RunningLights</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=10' target='i'>SnowSparkle</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=11' target='i'>Sparkle</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=12' target='i'>Strobe</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=13' target='i'>TheatreChase</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=14' target='i'>TheatreChaseRainbow</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=15' target='i'>TwinkleRandom</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=16' target='i'>Twinkle</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=17' target='i'>Firetorch</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=18' target='i'>Dots1</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=19' target='i'>Dots2</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=20' target='i'>SlowMandala</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=21' target='i'>SlowMandala2</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=22' target='i'>SlowMandala3</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=23' target='i'>Mandala8</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=24' target='i'>NoiseExample1</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=25' target='i'>NoiseExample2</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=26' target='i'>NoiseExample3</a></p>\n"
+                 "<p class='off'><a href='c.php?effectprg=27' target='i'>NoiseExample4</a></p>\n"
+                 "<iframe name='i' style='display:none' ></iframe>\n"                      // hack to keep the button press in the window
+                 "</article>\n");
+
+    message += F("<article>\n"
+                 "<h2>Values (with update)</h2>\n");
+    message += F("<p>Internal Voltage: <span id='internalVcc'>");          // example how to show values on the webserver
+    message += ESP.getVcc();
+    message += F("</span>mV</p>\n");
+
+
+    message += F("<p>");
+    message += "<form action='c.php?red=' target='i'> Red: <input type='number' name='red' min='0' max='255' value='128'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?green=' target='i'> Green: <input type='number' name='green' min='0' max='255' value='128'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?blue=' target='i'> Blue: <input type='number' name='blue' min='0' max='255' value='128'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?speed=' target='i'> Speed: <input type='number' name='speed' min='0' max='512' value='50'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?eyewidth=' target='i'> EyeWidth: <input type='number' name='eyewidth' min='1' max='100' value='1'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?eyespace=' target='i'> EyeSpace: <input type='number' name='eyespace' min='1' max='100' value='4'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?flashes=' target='i'> Flashed: <input type='number' name='flashed' min='1' max='50' value='10'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?delay=' target='i'> Delay: <input type='number' name='delay' min='1' max='500' value='50'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?pause=' target='i'> Pause: <input type='number' name='pause' min='10' max='5000' value='1000'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?fadespeed=' target='i'> Fadespeed: <input type='number' name='fadespeed' min='1' max='500' value='150'></form>";
+    message += F("</p>\n");
+    
+    message += F("<p>");
+    message += "<form action='c.php?Fade=' target='i'> Delay: <input type='checkbox' name='fade' value='true' checked='true'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?powerlimit=' target='i'> Powerlimit: <input type='number' name='powerlimit' min='100' max='10000' value='100'></form>";
+    message += F("</p>\n");
+
+    message += F("<p>");
+    message += "<form action='c.php?brightness=' target='i'> Brightness: <input type='number' name='brightness' min='1' max='255' value='63'></form>";
+    message += F("</p>\n"
+                 "</article>\n");
+  }
+
+
+  message += F("</main>\n"
+               "<footer>\n<p>");               // The footer will display the uptime, the IP the version of the sketch and the compile date/time
+  if (millis() > 604800)
+  {
+    message += F("<span id='week'>");
+    message +=  ((millis() / 604800) % 52);
+    message += F("</span> weeks ");
+  }
+  if (millis() > 86400)
+  {
+    message += F("<span id='day'>");
+    message += ((millis() / 86400) % 7);
+    message += F("</span> days ");
+  }
+  if (millis() > 3600)
+  {
+    message += F("<span id='hour'>");
+    message += ((millis() / 3600) % 24);
+    message += F("</span> hours ");
+  }
+
+  message += F("<span id='min'>");
+  message += ((millis() / 60) % 60);
+  message += F("</span> minutes ");
+
+  message += F("<span id='sec'>");
+  message += (millis() % 60);
+  message += F("</span> seconds since startup | Version  VERSION  | IP: ");
+  message += WiFi.localIP().toString();
+  message += F(" | " __DATE__ " " __TIME__ "</p>\n</footer>\n</body>\n</html>");
+  server.send(200, "text/html", message);
+}
+
+
+void handleCss()
+{
+  // output of stylesheet
+  // this is a straight forward example how to generat a static page from program memory
+  String message;
+  message = F("*{font-family:sans-serif}\n"
+              "body{margin:10px}\n"
+              "h1, h2{color:white;background: " CSS_MAINCOLOR " ;text-align:center}\n"
+              "h1{font-size:1.2em;margin:1px;padding:5px}\n"
+              "h2{font-size:1.0em}\n"
+              "h3{font-size:0.9em}\n"
+              "a{text-decoration:none;color:dimgray;text-align:center}\n"
+              "main{text-align:center}\n"
+              "article{vertical-align:top;display:inline-block;margin:0.2em;padding:0.1em;border-style:solid;border-color:#C0C0C0;background-color:#E5E5E5;width:20em;text-align:left}\n" // if you don't like the floating effect (vor portrait mode on smartphones!) - remove display:inline-block
+              "article h2{margin-top:0;padding-bottom:1px}\n"
+              "section {margin-bottom:0.2em;clear:both;}\n"
+              "table{border-collapse:separate;border-spacing:0 0.2em}\n"
+              "th, td{background-color:#C0C0C0}\n"
+              "button{margin-top:0.3em}\n"
+              "footer p{font-size:0.7em;color:dimgray;background:silver;text-align:center;margin-bottom:5px}\n"
+              "nav{background-color:silver;margin:1px;padding:5px;font-size:0.8em}\n"
+              "nav a{color:dimgrey;padding:10px;text-decoration:none}\n"
+              "nav a:hover{text-decoration:underline}\n"
+              "nav p{margin:0px;padding:0px}\n"
+              ".btn{background-color:#C0C0C0;color:dimgray;text-decoration:none;border-style:solid;border-color:dimgray}\n"   // style for button like actions
+              ".on, .off{margin-top:0;margin-bottom:0.2em;margin-left:4em;font-size:1.0em;background-color:#C0C0C0;border-style:solid;width:8em;height:1.5em;text-decoration:none;text-align:center}\n"
+              ".on{border-color:green}\n"
+              ".off{border-color:red}\n");
+  server.send(200, "text/css", message);
+}
+
+
+void handleJs() {
+  // Output: a JavaScript
+  // a function in the JavaScript uses AJAX to request a JSON file from the webserver and updates the values on the page if the object names and ID are the same
+  String message;
+  message += F("  function GetSwitchState(s) {\n"                            // 0 call function with settimeout, 1 run only once for manual update
+               "   nocache = '&nocache='+ Math.random() * 1000000;\n"
+               "   var request = new XMLHttpRequest(); \n"
+               "   request.onreadystatechange = function() {\n"
+               "   if (this.readyState == 4) {\n"
+               "    if (this.status == 200) {\n"
+               "     if (this.responseText != null) {\n"
+               "      var jo=JSON.parse(this.responseText);\n"
+               "      for (var i in jo)\n"
+               "      {if(document.getElementById(i)) document.getElementById(i).innerHTML=jo[i];}\n"                // as long as the JSON name fits to the HTML ID value will be replaced
+               // add other fields here
+               "      document.getElementById('sec').innerHTML = Math.floor(jo['ss']%60);\n"                         // example how to change a value in the HTML page
+               "      if (jo['ss']>60){document.getElementById('min').innerHTML=Math.floor(jo['ss']/60%60);}\n"
+               "      if (jo['ss']>3600){document.getElementById('hour').innerHTML=Math.floor(jo['ss']/3600%24);}\n"
+               "      if (jo['ss']>86400){document.getElementById('day').innerHTML=Math.floor(jo['ss']/86400%7);}\n"
+               "      if (jo['ss']>604800){document.getElementById('week').innerHTML=Math.floor(jo['ss']/604800%52);}\n");
+  message += F("      document.getElementById('sec').style.color = 'dimgray';\n"
+               "   }}}\n"
+               "   else {document.getElementById('sec').style.color = 'red';}\n"
+               "   }\n"
+               "   request.open('GET', 'json?p=");             // request the JSON output
+               //"   request.open('GET', 'http://172.18.67.103/json?p=");             // request the JSON output
+  message += server.uri();
+  message += F("' + nocache, true);\n"
+               "   request.send(null);\n"
+               "   if (s==0) setTimeout('GetSwitchState(0)', ");
+  message += ajaxIntervall * 1000;
+  message += F(");\n"
+               "   }");
+  server.send(200, "text/plain", message);
+}
+
+
+void handleJson() {
+  // Output: send data to browser as JSON
+  // after modification always check if JSON is still valid. Just call the JSON (json) in your webbrowser and check.
+  // Serial.println(F("D303 requested json"));
+  String message = "";
+  message = (F("{\"ss\":"));                    // Start of JSON and the first object "ss":
+  message += millis() / 1000;
+  message += (F(",\"internalVcc\":"));
+  message += ESP.getVcc();
+  message += (F(",\"button1\":"));
+  message += digitalRead(EFFECTBUTTON);
+  message += (F(",\"output1\":"));
+  message += digitalRead(WLANBUTTON);
+  message += (F(",\"output2\":"));
+  message += "Blah"; // digitalRead(OUTPUT2_PIN);
+  message += (F("}"));                           // End of JSON
+  server.send(200, "text/plain", message);
+}
+
+
+void handleCommand() {
+  // receive command and handle accordingly
+   Serial.println(F("D322 handleCommand"));
+  for (uint8_t i = 0; i < server.args(); i++) {
+    Serial.print(server.argName(i));
+    Serial.print(F(": "));
+    Serial.println(server.arg(i));
+  }
+
+  if (server.argName(0) == "lightsoff")                             // the parameter which was sent to this server
+    {
+    if (server.arg(0) == "1")                                    // the value for that parameter
+      {selectedEffect=0;handleRoot();}
+    } 
+  else if (server.argName(0) == "effectprg")
+        {String effectPrg = server.arg(0);
+         selectedEffect = effectPrg.toInt();
+        }
+  else if (server.argName(0) == "erasewlan")
+        {
+        if (server.arg(0) == "1")
+          {
+            Serial.println(F("Erasing WLAN Credetials, ESP8266 will reset"));
+            WiFiManager wifiManager;
+            wifiManager.resetSettings();
+            ESP.restart();
+          }
+        }
+  else if (server.argName(0) == "brightness")
+        {String brgtnss = server.arg(0);
+         brightness = brgtnss.toInt();
+         handleBrightness;
+        }
+  else if (server.argName(0) == "powerlimit")
+        {String pwlim = server.arg("powerlimit");
+         PowerLimit = pwlim.toInt();
+         handlePowerLimit;}
+  else if (server.argName(0) == "red")
+        {String colr = server.arg("red");
+         red = colr.toInt();
+         }
+  else if (server.argName(0) == "green")
+        {String colg = server.arg("green");
+         green = colg.toInt();
+         }
+  else if (server.argName(0) == "blue")
+        {String colb = server.arg("blue");
+         blue = colb.toInt();
+         }
+  else if (server.argName(0) == "speed")
+        {String aaa = server.arg("speed");
+         Speed = aaa.toInt();
+         }
+  else if (server.argName(0) == "eyewidth")
+        {String aaa = server.arg("eyewidth");
+         EyeWidth = aaa.toInt();
+         }
+  else if (server.argName(0) == "fade")
+        {
+         if (server.arg(0) == "1")
+            {Fade=true;}
+         else
+            {Fade=false;}
+         } 
+  else if (server.argName(0) == "eyestat")
+        {String aaa = server.arg("eyestat");
+         eyeStat = aaa.toInt();
+         }
+  else if (server.argName(0) == "eyespace")
+        {String aaa = server.arg("eyespace");
+         EyeSpace = aaa.toInt();
+         }
+  else if (server.argName(0) == "fadespeed")
+        {String aaa = server.arg("fadespeed");
+         fadeSpeed = aaa.toInt();
+         }
+  else if (server.argName(0) == "flashes")
+        {String aaa = server.arg("flashes");
+         Flashes = aaa.toInt();
+         }
+  else if (server.argName(0) == "delay")
+        {String aaa = server.arg("delay");
+         Delay = aaa.toInt();
+         }
+  else if (server.argName(0) == "pause")
+        {String aaa = server.arg("pause");
+         Pause = aaa.toInt();
+         }
+  else if (server.argName(0) == "fc1")
+        {String aaa = server.arg("fc1");
+         fc1 = aaa.toInt();
+         }
+  else if (server.argName(0) == "fc2")
+        {String aaa = server.arg("fc2");
+         fc2 = aaa.toInt();
+         }
+  else if (server.argName(0) == "fc3")
+        {String aaa = server.arg("fc3");
+         fc3 = aaa.toInt();
+         }
+  else if (server.argName(0) == "fc4")
+        {String aaa = server.arg("fc4");
+         fc4 = aaa.toInt();
+         }
+  server.send(204, "text/plain", "No Content");
+}
