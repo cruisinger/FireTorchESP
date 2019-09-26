@@ -10,6 +10,7 @@
 #include <PubSubClient.h>
 #include <DNSServer.h>  
 #include <WiFiManager.h>
+#include <ArduinoOTA.h> // OTA Upload via ArduinoIDE
 #define screenWidth 14  //width of LED Matrix 14
 #define screenHeight 22   //height of LED Matrix 22
 #define extraLines 2 //only for firetorch()
@@ -147,6 +148,17 @@ TBlendType    currentBlending;
 extern CRGBPalette16 myRedWhiteBluePalette;
 extern const TProgmemPalette16 myRedWhiteBluePalette_p PROGMEM;
 
+//-----------------Webserver-------------------------
+const uint16_t clientIntervall = 0;                        // intervall to send data to a server in seconds. Set to 0 if you don't want to send data
+unsigned long ss = 0;                             // current second since startup
+const uint16_t ajaxIntervall = 5;                 // Intervall for AJAX call of website in seconds
+uint32_t clientPreviousSs = 0 - clientIntervall;  // last second when data was sent to server
+ADC_MODE(ADC_VCC);                    // to use getVcc
+uint32_t internalVcc = ESP.getVcc();
+#ifndef CSS_MAINCOLOR
+#define CSS_MAINCOLOR "#8A0829"         // fallback if no CSS_MAINCOLOR was declared for the board
+#endif
+
 //------------------------------------------
 
 void resetArgs(){
@@ -191,6 +203,13 @@ void handleRoot() {
 }
 
 void handleArgs(){
+//  message = "Arguments: ";
+//  message += server.args();
+//  message += "\n";
+//  for (uint8_t i = 0; i < server.args(); i++) {
+//    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+//  }
+//  Serial.println(message);
   if (server.hasArg("red")){String colr = server.arg("red");red = colr.toInt();}
   if (server.hasArg("green")){String colg = server.arg("green");green = colg.toInt();}
   if (server.hasArg("blue")){String colb = server.arg("blue");blue = colb.toInt();}
@@ -241,27 +260,20 @@ void handleNoiseExample4(){resetArgs();handleArgs();selectedEffect=27;handleRoot
 void handlePowerLimit(){handleArgs();handleRoot();}
 void handleBrightness(){handleArgs();handleRoot();}
 
-void handleNotFound() {
-  digitalWrite(led, 0);
-  message = "File Not Found\n\n";
-  message += "URI: ";
-  message += server.uri();
-  message += "\nMethod: ";
-  message += (server.method() == HTTP_GET) ? "GET" : "POST";
-  message += "\nArguments: ";
-  message += server.args();
-  message += "\n";
-  for (uint8_t i = 0; i < server.args(); i++) {
-    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
-  }
-  server.send(404, "text/plain", message);
-  digitalWrite(led, 1);
-}
+
 
 void setup(void) {
   pinMode(led, OUTPUT);
   digitalWrite(led, 1);
   Serial.begin(115200);
+
+  /*
+  digitalWrite (SOFTRESETPIN, HIGH);
+  pinMode(SOFTRESETPIN, OUTPUT);
+  */
+
+  char myhostname[12] = {"LED-Fackel"};
+  WiFi.hostname(myhostname);
 
   pinMode(EFFECTBUTTON, INPUT_PULLUP);
   digitalWrite (EFFECTBUTTON, HIGH);  // internal pull-up resistor
@@ -316,7 +328,11 @@ void setup(void) {
   y2 = random16();
   z2 = random16();
 
-  server.on("/", handleRoot);
+  ArduinoOTA.begin(); // OTA Upload via ArduinoIDE
+
+  server.on("/old", handleRoot);
+  server.on("/", handlePage);  
+  server.on("/0.htm", handlePage);
   server.on("/ledoff", [](){selectedEffect=0;handleRoot();});
   server.on("/powerlimit", handlePowerLimit);
   server.on("/brightness", handleBrightness);    
@@ -347,6 +363,10 @@ void setup(void) {
   server.on("/NoiseExample2", handleNoiseExample2);
   server.on("/NoiseExample3", handleNoiseExample3);
   server.on("/NoiseExample4", handleNoiseExample4);
+  server.on("/f.css", handleCss);       // a stylesheet
+  server.on("/j.js",  handleJs);        // a javascript to handle AJAX/JSON Update of the page
+  server.on("/json",  handleJson);      // send data in JSON
+  server.on("/c.php", handleCommand);   // process commands
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println("HTTP server started");
@@ -357,9 +377,16 @@ void setup(void) {
 
 void loop(void) {
   server.handleClient();
+  ArduinoOTA.handle(); // OTA Upload via ArduinoIDE
   checkForMQTTMessages();
   FastLED.setMaxPowerInMilliWatts(PowerLimit);  // for powercapping, limits power usage
   FastLED.setBrightness(brightness);
+
+/*  
+  if (digitalRead(EFFECTBUTTON) == LOW) {
+    Serial.println("someone pressed the EFFECT button! ");
+    changeEffect();
+  }*/
 
   if (digitalRead(WLANBUTTON) == LOW) {
       Serial.println("someone pressed the wlan button! Erasing wlan credentials now");
@@ -383,9 +410,15 @@ void loop(void) {
   }
 
   if (EffectButtonPressed==1){
+/*      Serial.print("EffectButtonPressed: ");
+      Serial.print(EffectButtonPressed);
+      Serial.println(" ");*/
     setAll(0,0,0); showStrip();  //clear display
     setEffectParameters();
     EffectButtonPressed=0;
+/*      Serial.print("EffectButtonPressed: ");
+      Serial.print(EffectButtonPressed);
+      Serial.println(" ");*/
     }
 
   switch(selectedEffect) {
@@ -424,7 +457,10 @@ void loop(void) {
   }
 }
 
-void setEffectParameters(){//you can set individual parameters for every effect/lightprogram; this function should be called once at start of a program only if Button was pressed
+void setEffectParameters(){//you can set individual parameters for every effect/lightprogram; this function should be called once if program was changed by pressed Button OR MQTT
+/*      Serial.println("setEffectParameters for Program No.: ");
+      Serial.print(selectedEffect);
+      Serial.println(" ");*/
   switch(selectedEffect) {
     case 1  : {handleColorWipe();red=128;green=0;blue=0;Speed=100;break;}
     case 2  : {handleCyclonBounce();red=0;green=127;blue=0;Speed=100;EyeWidth=2;break;}
@@ -463,6 +499,7 @@ void setEffectParameters(){//you can set individual parameters for every effect/
 void changeEffect() {  // time critical routine, because called by interrupt, has to be as short as possible, variables has to declared as volatile
   if((millis() - alteZeit) > entprellZeit) { 
     // innerhalb der entprellZeit nichts machen
+    
   if (selectedEffect >MAXIMUMEFFECTS){
       selectedEffect=1;
     }
@@ -471,8 +508,22 @@ void changeEffect() {  // time critical routine, because called by interrupt, ha
       selectedEffect++;    
     }
     EffectButtonPressed = 1;
+   
+      Serial.print("selectedEffect_old: ");
+      Serial.print(selectedEffect_old);
+      Serial.println(" ");
+      
+      Serial.print("Effect Program No.: ");
+      Serial.print(selectedEffect);
+      Serial.println(" ");
+      
+      Serial.print("EffectButtonPressed.: ");
+      Serial.print(EffectButtonPressed);
+      Serial.println(" ");
+
     alteZeit = millis(); // letzte Schaltzeit merken      
   }
+      Serial.println("void changeEffect() ");
 }
 
 void SwitchLightsOff(){
@@ -2410,10 +2461,10 @@ boolean checkForMQTTMessages(){
     dtostrf(selectedEffect, 2, 0, StrselectedEffect);
     client.publish(mqtt_outtopic_ledprg, StrselectedEffect); 
     EffectButtonPressed = 1;
+    //setEffectParameters(); 
        return true;
     } else {
         //Serial.println("selectedEffect unchanged");
        return false;
     }
   }
-/*--------------------------------------------*/
